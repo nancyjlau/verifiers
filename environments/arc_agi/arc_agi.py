@@ -132,19 +132,21 @@ Provide your answer as a 2D grid in JSON format, e.g. [[1,2,3],[4,5,6]]"""
     if data_path is None:
         if arc_version == "1":
             data_path = "~/ARC-AGI/data"
+            repo_url = "https://github.com/fchollet/ARC-AGI.git"
         elif arc_version == "2":
             data_path = "~/ARC-AGI-2/data"
+            repo_url = "https://github.com/arcprize/ARC-AGI-2.git"
         else:
             raise ValueError(f"Invalid arc_version: {arc_version}. Must be '1' or '2'")
     
     data_path = os.path.expanduser(data_path)
     
     if not os.path.exists(data_path):
-        raise ValueError(
-            f"Data path not found: {data_path}\n"
-            f"Please clone the ARC-AGI-{arc_version} repository first:\n"
-            f"  {'git clone https://github.com/fchollet/ARC-AGI.git' if arc_version == '1' else 'git clone https://github.com/arcprize/ARC-AGI-2.git'}"
-        )
+        import subprocess
+        repo_path = os.path.dirname(data_path)
+        print(f"Downloading ARC-AGI-{arc_version}...")
+        subprocess.run(["git", "clone", "--depth", "1", repo_url, repo_path], check=True)
+        print(f"Downloaded to {repo_path}")
     
     train_tasks = load_arc_tasks_from_local(data_path, "training")
     if num_train_examples > 0:

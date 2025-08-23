@@ -4,8 +4,8 @@
 
 ### Overview
 - **Environment ID**: `arc-agi`
-- **Short description**: <one-sentence description>
-- **Tags**: <comma-separated tags>
+- **Short description**: Abstract reasoning puzzles requiring pattern recognition and grid transformations
+- **Tags**: arc-agi, single-turn, reasoning, puzzles
 
 ### Datasets
 - **Primary dataset(s)**: <name(s) and brief description>
@@ -13,8 +13,8 @@
 - **Split sizes**: <train/eval counts>
 
 ### Task
-- **Type**: <single-turn | multi-turn | tool use>
-- **Parser**: <e.g., ThinkParser, XMLParser, custom>
+- **Type**: single-turn
+- **Parser**: ARCParser (custom grid extraction parser)
 - **Rubric overview**: <briefly list reward functions and key metrics>
 
 ### Quickstart

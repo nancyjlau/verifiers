@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from rich.markup import escape
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -133,7 +134,10 @@ def format_prompt_or_completion(prompt_or_completion) -> str:
         for msg in prompt_or_completion:
             assert isinstance(msg, dict)
             role = msg.get("role", "")
+            # aggressive escaping by replacing brackets entirely to avoid markup issues
             content = str(msg.get("content", ""))
+            content = content.replace('[', '⟨').replace(']', '⟩')
+            content = escape(content)
             # Assistant in white, all others in grey
             if role == "assistant":
                 lines.append(f"[b]{role}:[/b] {content}")
@@ -155,13 +159,19 @@ def format_prompt_or_completion(prompt_or_completion) -> str:
                 
                 for tool_call in tool_calls_data:
                     if isinstance(tool_call, dict) and 'function' in tool_call:
+                        func_name = str(tool_call['function']['name']).replace('[', '⟨').replace(']', '⟩')
+                        func_args = str(tool_call['function']['arguments']).replace('[', '⟨').replace(']', '⟩')
+                        func_name = escape(func_name)
+                        func_args = escape(func_args)
                         lines.append(
-                            f"[b]tool call:[/b] {tool_call['function']['name']}\n{tool_call['function']['arguments']}"
+                            f"[b]tool call:[/b] {func_name}\n{func_args}"
                         )
                     elif isinstance(tool_call, str):
-                        lines.append(f"[b]tool call:[/b] {tool_call}")
+                        tool_call_str = str(tool_call).replace('[', '⟨').replace(']', '⟩')
+                        lines.append(f"[b]tool call:[/b] {escape(tool_call_str)}")
         return "\n\n".join(lines)
-    return str(prompt_or_completion)
+    content = str(prompt_or_completion).replace('[', '⟨').replace(']', '⟩')
+    return escape(content)
 
 
 # ----------------------------
@@ -388,14 +398,14 @@ class ViewRunScreen(Screen):
                 with Panel(classes="column-panel"):
                     yield Label("Prompt", classes="column-header")
                     yield VerticalScroll(
-                        Static("", id="prompt-content"),
+                        Static("", id="prompt-content", markup=True),
                         id="prompt-scroll",
                     )
 
                 with Panel(classes="column-panel"):
                     yield Label("Completion", classes="column-header")
                     yield VerticalScroll(
-                        Static("", id="completion-content"),
+                        Static("", id="completion-content", markup=True),
                         id="completion-scroll",
                     )
 

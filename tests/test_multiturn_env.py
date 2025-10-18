@@ -3,7 +3,7 @@
 import pytest
 from datasets import Dataset
 
-from verifiers import MultiTurnEnv, Parser, Rubric
+from verifiers import Messages, MultiTurnEnv, Parser, Rubric, State
 
 
 class TestMultiTurnEnv:
@@ -78,8 +78,7 @@ class TestMultiTurnEnv:
         # Check state structure
         assert state["answer"] == "target_answer"
         assert state["prompt"] == prompt
-        # state["completion"] is initialized to [] but not updated during rollout
-        assert state["completion"] == []
+        assert state["completion"] == completion
         assert "responses" in state
         assert len(state["responses"]) == 3  # Three assistant responses
 
@@ -169,15 +168,16 @@ class TestMultiTurnEnv:
             answer="test_answer",
             task="test_task",
             info={"extra": "data"},
+            example_id=0,
         )
 
         # Check all state fields are initialized
         assert state["prompt"] == prompt
-        # state["completion"] is initialized to [] but not updated during rollout
-        assert state["completion"] == []
+        assert state["completion"] == completion
         assert state["answer"] == "test_answer"
         assert state["task"] == "test_task"
         assert state["info"] == {"extra": "data"}
+        assert state["example_id"] == 0
         assert "responses" in state
         assert isinstance(state["responses"], list)
 
@@ -286,10 +286,14 @@ class TestMultiTurnEnv:
             def __init__(self, **kwargs):
                 super().__init__(message_type="completion", **kwargs)
 
-            def is_completed(self, messages, state, **kwargs):
+            async def is_completed(
+                self, messages: Messages, state: State, **kwargs
+            ) -> bool:
                 return "DONE" in messages
 
-            def env_response(self, messages, state, **kwargs):
+            async def env_response(
+                self, messages: Messages, state: State, **kwargs
+            ) -> tuple[Messages, State]:
                 return " Continue.", state
 
         completion_dataset = Dataset.from_dict(

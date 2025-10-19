@@ -62,7 +62,7 @@ class MultiTurnEnv(Environment):
         state: State = {},
         task: str = "default",
         info: Info | None = None,
-        id: int = 0,
+        example_id: int = 0,
         sampling_args: SamplingArgs | None = None,
         **kwargs,
     ) -> tuple[Messages, State]:
@@ -73,7 +73,7 @@ class MultiTurnEnv(Environment):
         info = info or {}
         is_completed = False
         state = state or await self.init_state(
-            prompt, completion, answer, task, info, id
+            prompt, completion, answer, task, info, example_id
         )
         start_time = time.time()
         state = await maybe_await(self.setup_state, state, **kwargs)

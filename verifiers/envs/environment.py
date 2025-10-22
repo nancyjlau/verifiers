@@ -303,7 +303,7 @@ class Environment(ABC):
             if isinstance(e, BadRequestError):
                 error_text = e.response.text.lower()
                 context_length_phrases = [
-                    "This model's maximum context length is",
+                    "this model's maximum context length is",
                     "is longer than the model's context length",
                     "exceeds the model's context length",
                 ]

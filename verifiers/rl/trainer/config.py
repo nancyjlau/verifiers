@@ -40,7 +40,7 @@ class RLConfig(TrainingArguments):
         metadata={"help": "Full model modules to train (instead of LoRA modules)."},
     )
     lora_use_rslora: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to use RSLoRA."},
     )
     lora_config: Optional[LoraConfig] = field(

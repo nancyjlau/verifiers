@@ -20,11 +20,11 @@ class RLConfig(TrainingArguments):
         metadata={"help": "Whether to use LoRA."},
     )
     lora_rank: int = field(
-        default=16,
+        default=8,
         metadata={"help": "LoRA rank."},
     )
     lora_alpha: int = field(
-        default=16,
+        default=32,
         metadata={"help": "LoRA alpha."},
     )
     lora_dropout: float = field(
@@ -40,7 +40,7 @@ class RLConfig(TrainingArguments):
         metadata={"help": "Full model modules to train (instead of LoRA modules)."},
     )
     lora_use_rslora: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to use RSLoRA."},
     )
     lora_config: Optional[LoraConfig] = field(
@@ -82,7 +82,7 @@ class RLConfig(TrainingArguments):
 
     # Parameters that control the training
     learning_rate: float = field(
-        default=1e-5,
+        default=1e-4,
         metadata={
             "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
             "`transformers.TrainingArguments`."
@@ -281,7 +281,6 @@ class RLConfig(TrainingArguments):
         # configure lora
         if not self.use_lora:
             self.lora_config = None
-            # raise ValueError("RLTrainer is LoRA-only; set `use_lora=True`.")
         else:
             if self.lora_target_modules is None:
                 self.lora_target_modules = [

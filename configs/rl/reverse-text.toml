@@ -4,7 +4,7 @@ model = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
 id = "primeintellect/reverse-text"
 
 [inference]
-gpus = 7
+gpus = 1
 
 [inference.args]
 enforce_eager = true

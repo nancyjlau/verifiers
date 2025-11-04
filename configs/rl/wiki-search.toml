@@ -7,7 +7,7 @@ id = "will/wiki-search"
 max_turns = 8
 
 [inference]
-gpus = 7
+gpus = 1
 
 [inference.args]
 enforce_eager = true

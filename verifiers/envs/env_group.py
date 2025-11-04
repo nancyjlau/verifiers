@@ -45,6 +45,7 @@ class EnvGroupRubric(Rubric):
         state: State | None = None,
         task: str = "default",
         info: dict | None = None,
+        example_id: int | None = None,
         **kwargs,
     ) -> RolloutScore:
         """
@@ -68,7 +69,7 @@ class EnvGroupRubric(Rubric):
 
         # Score with the environment's rubric
         env_results = await env.rubric.score_rollout(
-            prompt, completion, answer, state, task, info, **kwargs
+            prompt, completion, answer, state, task, info, example_id, **kwargs
         )
 
         # Update metrics with individual metric scores from the environment
@@ -135,9 +136,15 @@ class EnvGroup(Environment):
         # wrap rubrics
         rubric = EnvGroupRubric(self.env_map)
 
+        # Don't set oai_tools at the group level since different sub-environments
+        # may have different tools. Instead, set them per-task in rollout().
         # initialize parent Environment
         super().__init__(
-            dataset=dataset, eval_dataset=eval_dataset, rubric=rubric, **kwargs
+            dataset=dataset,
+            eval_dataset=eval_dataset,
+            rubric=rubric,
+            oai_tools=None,
+            **kwargs,
         )
         self.logger.info(
             f"Initialized EnvGroup with {len(envs)} environments: {self.env_names}"
@@ -153,7 +160,7 @@ class EnvGroup(Environment):
         state: State | None = None,
         task: str = "default",
         info: Info | None = None,
-        id: int = 0,
+        example_id: int = 0,
         sampling_args: SamplingArgs | None = None,
         **kwargs,
     ) -> tuple[str | list[ChatMessage], State]:
@@ -173,6 +180,10 @@ class EnvGroup(Environment):
         # Route to appropriate environment
         env = self.env_map[task]
 
+        # Set tools for this task's environment if not already set in info
+        if "oai_tools" not in info and hasattr(env, "oai_tools") and env.oai_tools:
+            info["oai_tools"] = env.oai_tools
+
         # Pass through all arguments
         return await env.rollout(
             client,
@@ -183,7 +194,7 @@ class EnvGroup(Environment):
             state,
             task,
             info,
-            id,
+            example_id,
             sampling_args,
             **kwargs,
         )

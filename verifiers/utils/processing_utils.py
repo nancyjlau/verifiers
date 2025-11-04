@@ -1,4 +1,3 @@
-import json
 from typing import TYPE_CHECKING
 
 from verifiers.types import ChatCompletion, ChatMessage, Completion, State
@@ -106,33 +105,6 @@ def process_chat_format_vllm(
     i = 0
     while i < len(zipped):
         message, response = zipped[i]
-
-        def deserialize_tool_calls(message: dict) -> dict:
-            """
-            Deserialize tool calls in messages, if any are present.
-            Parses JSON string arguments into dicts for chat templates like Qwen3's.
-            Tool calls are assumed to be dicts (from model_dump()).
-            """
-
-            def deserialize_tool_call(tool_call: dict) -> dict:
-                function = tool_call["function"]
-                return {
-                    **tool_call,
-                    "function": {
-                        **function,
-                        "arguments": json.loads(function["arguments"]),
-                    },
-                }
-
-            return {
-                **message,
-                "tool_calls": [
-                    deserialize_tool_call(tool_call)
-                    for tool_call in message.get("tool_calls", []) or []
-                ],
-            }
-
-        # message = deserialize_tool_calls(message)
 
         # assistant case -- use response
         if message["role"] == "assistant":

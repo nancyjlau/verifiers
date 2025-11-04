@@ -106,17 +106,13 @@ def process_chat_format_vllm(
 
         def deserialize_tool_calls(message: dict) -> dict:
             """
-            Deserialize tool calls in messages, if any are present. Iterates
-            over all messages in a message list and tries to find
-            "tool_calls" key. If found, assumes it is a OAI format and has
-            key "function" with "arguments" key which is stringified. It
-            will then deserialize the argument so that chat tmeplates like
-            Qwen3's can be used.
+            Deserialize tool calls in messages, if any are present.
+            Parses JSON string arguments into dicts for chat templates like Qwen3's.
+            Tool calls are assumed to be dicts (from model_dump()).
             """
 
-            def deserialize_tool_call(tool_call) -> dict:
-                tool_call = dict(tool_call)
-                function = dict(tool_call["function"])
+            def deserialize_tool_call(tool_call: dict) -> dict:
+                function = tool_call["function"]
                 return {
                     **tool_call,
                     "function": {

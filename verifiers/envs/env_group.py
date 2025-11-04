@@ -136,15 +136,9 @@ class EnvGroup(Environment):
         # wrap rubrics
         rubric = EnvGroupRubric(self.env_map)
 
-        # Don't set oai_tools at the group level since different sub-environments
-        # may have different tools. Instead, set them per-task in rollout().
         # initialize parent Environment
         super().__init__(
-            dataset=dataset,
-            eval_dataset=eval_dataset,
-            rubric=rubric,
-            oai_tools=None,
-            **kwargs,
+            dataset=dataset, eval_dataset=eval_dataset, rubric=rubric, **kwargs
         )
         self.logger.info(
             f"Initialized EnvGroup with {len(envs)} environments: {self.env_names}"
@@ -179,10 +173,6 @@ class EnvGroup(Environment):
 
         # Route to appropriate environment
         env = self.env_map[task]
-
-        # Set tools for this task's environment if not already set in info
-        if "oai_tools" not in info and hasattr(env, "oai_tools") and env.oai_tools:
-            info["oai_tools"] = env.oai_tools
 
         # Pass through all arguments
         return await env.rollout(

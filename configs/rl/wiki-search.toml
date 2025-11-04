@@ -19,7 +19,7 @@ gpus = 1
 
 [trainer.args]
 run_name = "wiki-search"
-micro_batch_size = 4
+micro_batch_size = 2
 rollouts_per_example = 16
 batch_size = 1024
 max_steps = 500

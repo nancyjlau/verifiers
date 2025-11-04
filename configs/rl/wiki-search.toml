@@ -20,8 +20,8 @@ gpus = 1
 [trainer.args]
 run_name = "wiki-search"
 micro_batch_size = 2
-rollouts_per_example = 16
-batch_size = 128
+rollouts_per_example = 8
+batch_size = 64
 max_steps = 500
 max_tokens = 512
 max_seq_len = 4192

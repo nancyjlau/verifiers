@@ -1,7 +1,7 @@
 from collections import defaultdict
 from typing import TYPE_CHECKING, Mapping
 
-from datasets import concatenate_datasets
+from datasets import Dataset, concatenate_datasets
 from openai import AsyncOpenAI
 
 from verifiers import (
@@ -159,6 +159,40 @@ class EnvGroup(Environment):
         self.logger.info(
             f"Initialized EnvGroup with {len(envs)} environments: {self.env_names}"
         )
+
+    def format_dataset(
+        self,
+        dataset: Dataset,
+        system_prompt: str | None = None,
+        few_shot: list[ChatMessage] | None = None,
+        question_key: str = "question",
+        answer_key: str = "answer",
+        map_kwargs: dict = {},
+    ) -> Dataset:
+        """
+        Ensures that the (eval) dataset of an env group has unique example ids.
+
+        Explanation: Each individual env creates example id column unique to the
+        env upon init. However, these are not unique across splits (e.g. they
+        will have an example id `0`) Upon initting the env group, this method is
+        called (via super().__init__) and forcefully removes the example id
+        column in the concatenated dataset and replaces it with a new one with
+        globally unique example ids.
+        """
+
+        # Remove the example_id column present in the individual env datasets and add global ids
+        if "example_id" in dataset.column_names:
+            dataset = dataset.remove_columns(["example_id"])
+
+        def add_example_id(example, i):
+            example["example_id"] = i
+            return example
+
+        dataset = dataset.map(add_example_id, with_indices=True, **map_kwargs)
+
+        assert "example_id" in dataset.column_names
+        assert "prompt" in dataset.column_names
+        return dataset
 
     async def init_state(
         self,

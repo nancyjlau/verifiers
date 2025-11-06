@@ -60,7 +60,7 @@ class EnvGroupRubric(Rubric):
         not applicable to this sample's environment.
         """
         state = state or {}
-        info = info or {}
+        info = info if info is not None else {}
 
         # Initialize metrics with all reward names set to 0.0
         metrics = {name: 0.0 for name in self.all_reward_names}

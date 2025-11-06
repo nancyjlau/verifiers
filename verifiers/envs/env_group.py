@@ -246,6 +246,7 @@ class EnvGroup(Environment):
         # Set tools for this task's environment if not already set in info
         if "oai_tools" not in info and hasattr(env, "oai_tools") and env.oai_tools:
             info["oai_tools"] = env.oai_tools
+            state["info"]["oai_tools"] = env.oai_tools
 
         # Pass through all arguments
         completion, state = await env.rollout(

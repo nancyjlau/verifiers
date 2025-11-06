@@ -237,7 +237,7 @@ class EnvGroup(Environment):
         2. info['task']
         3. First environment name (default)
         """
-        info = info or {}
+        info = info if info is not None else {}
         sampling_args = sampling_args or {}
 
         # Route to appropriate environment

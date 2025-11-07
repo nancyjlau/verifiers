@@ -35,14 +35,24 @@ def tmux_exists() -> bool:
         return False
 
 
-def ensure_no_session(session: str) -> None:
+def session_exists(session: str) -> bool:
     proc = subprocess.run(
         ["tmux", "has-session", "-t", session],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if proc.returncode == 0:
-        run(["tmux", "kill-session", "-t", session])
+    return proc.returncode == 0
+
+
+def find_available_session_name(base_name: str) -> str:
+    if not session_exists(base_name):
+        return base_name
+    index = 2
+    while True:
+        candidate = f"{base_name}-{index}"
+        if not session_exists(candidate):
+            return candidate
+        index += 1
 
 
 def create_tmux_session(session: str, output_dir: str, cmd: str, cwd: Path) -> None:
@@ -181,8 +191,7 @@ def main():
 
     cmd = f"uv run rl @ {config_path_rel_to_prime_rl}"
 
-    session = args.session
-    ensure_no_session(session)
+    session = find_available_session_name(args.session)
 
     output_dir = str((prime_rl_dir / args.output_dir).resolve())
     create_tmux_session(session, output_dir, cmd, prime_rl_dir.resolve())

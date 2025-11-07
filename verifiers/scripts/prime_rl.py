@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wrapper script to run prime-rl rl command from the verifiers project root.
+Wrapper script to run prime-rl rl command from the current working directory.
 
 Usage:
     uv run prime-rl @ configs/prime-rl/config.toml
@@ -161,14 +161,16 @@ def main():
     if args.at != "@":
         raise SystemExit("Usage: prime-rl @ path/to/file.toml")
 
-    verifiers_root = Path(__file__).parent.parent.parent.resolve()
-    prime_rl_dir = verifiers_root / "prime-rl"
+    cwd = Path.cwd()
+    prime_rl_dir = cwd / "prime-rl"
     if not prime_rl_dir.exists():
         raise SystemExit(
             "Error: prime-rl directory not found. Run 'uv run vf-setup' first."
         )
 
     config_path = Path(args.config_path)
+    if not config_path.is_absolute():
+        config_path = cwd / config_path
     if not config_path.exists():
         raise SystemExit(f"TOML config not found: {config_path}")
 

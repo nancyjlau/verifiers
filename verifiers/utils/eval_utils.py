@@ -82,17 +82,16 @@ def print_results(results: GenerateOutputs, num_samples: int = 1):
     )
     r = results["metadata"]["rollouts_per_example"]
     n = len(results["reward"]) // r
+    # results are sorted by example_id, so rollout i is at indices [i, i+r, i+2r, ...]
     for i in range(r):
-        # rounded to 3 decimal places
-        trials = [round(results["reward"][(i * n) + j], 3) for j in range(n)]
+        trials = [round(results["reward"][i + (j * r)], 3) for j in range(n)]
         out = f"r{i + 1}: {trials}"
         print(out)
     for k in results["metrics"]:
         v = results["metrics"][k]
         print(f"{k}: avg - {sum(v) / len(v):.3f}, std - {np.std(v):.3f}")
         for i in range(r):
-            # rounded to 3 decimal places
-            trials = [round(v[(i * n) + j], 3) for j in range(n)]
+            trials = [round(v[i + (j * r)], 3) for j in range(n)]
             out = f"r{i + 1}: {trials}"
             print(out)
 

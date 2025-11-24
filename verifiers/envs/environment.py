@@ -719,6 +719,9 @@ class Environment(ABC):
             if pbar is not None:
                 pbar.close()
 
+        # sort by example_id to ensure deterministic ordering regardless of completion order
+        all_states.sort(key=lambda s: s.get("example_id", 0))
+
         results = self._prepare_rollout_results(
             all_states,
             model,

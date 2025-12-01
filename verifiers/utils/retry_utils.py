@@ -28,3 +28,4 @@ async def with_retry(
             logger.error(f"Error calling {name}: {e}")
             await asyncio.sleep(min(delay, max_backoff_seconds))
             delay *= backoff_factor
+    raise RuntimeError(f"Failed after {max_retries} attempts")

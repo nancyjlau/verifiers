@@ -114,8 +114,18 @@ class Environment(ABC):
                     'Please use message_type="chat" instead, or pre-format your dataset '
                     'to contain a "prompt" column.'
                 )
-            self.dataset = dataset
-            self.eval_dataset = eval_dataset
+            if dataset is not None:
+                self.dataset = self.format_completion_dataset(
+                    dataset, map_kwargs=map_kwargs
+                )
+            else:
+                self.dataset = None
+            if eval_dataset is not None:
+                self.eval_dataset = self.format_completion_dataset(
+                    eval_dataset, map_kwargs=map_kwargs
+                )
+            else:
+                self.eval_dataset = None
 
         self.sampling_args = {"n": 1, "extra_body": {}}
         if sampling_args is not None:
@@ -263,6 +273,16 @@ class Environment(ABC):
         dataset = self._ensure_prompt(
             dataset, system_prompt, few_shot, question_key, answer_key, map_kwargs
         )
+        dataset = self._ensure_task(dataset, map_kwargs)
+        return dataset
+
+    def format_completion_dataset(
+        self, dataset: Dataset, map_kwargs: dict = {}
+    ) -> Dataset:
+        """
+        Format dataset by creating example_id and prompt columns, and setting task column.
+        """
+        dataset = self._ensure_example_id(dataset)
         dataset = self._ensure_task(dataset, map_kwargs)
         return dataset
 

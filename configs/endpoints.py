@@ -4,7 +4,7 @@ ENDPOINTS = {
         "url": "http://0.0.0.0:8000/v1",
         "key": "PRIME_API_KEY",
     },
-    "qwen3-4b-": {
+    "qwen3-4b-t": {
         "model": "Qwen/Qwen3-4B-Thinking-2507",
         "url": "http://0.0.0.0:8000/v1",
         "key": "PRIME_API_KEY",

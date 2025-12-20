@@ -1,6 +1,6 @@
-# Experimental Environment Classes
+# Experimental Environments
 
-This folder contains newer and more experimental environment classes that may still have some sharper edges. They are subject to change and may be removed without notice.
+Newer and more experimental environment classes that may have some sharper edges + change more frequently.
 
 ## GymEnv
 
@@ -8,7 +8,7 @@ Universal runner for Gym-compatible environments. Wraps any environment that imp
 
 ## CliAgentEnv
 
-Environment for running full agent code inside sandboxes. Extends `MultiTurnEnv` to reuse the rollout loop, but intercepts the agent's API requests via an HTTP proxy server. Each agent request triggers one rollout step. Useful for evaluating autonomous agents that make their own API calls.
+Environment for running custom agent code inside sandboxes. Intercepts the agent's OpenAI API requests via an HTTP proxy server, with each request triggering one `MultiTurnEnv` rollout step.
 
 ## HarborEnv
 

@@ -131,8 +131,9 @@ class GymEnv(vf.MultiTurnEnv):
                 else:
                     eval_rows.append(row)
         finally:
-            if hasattr(env, "close"):
-                env.close()
+            close_fn = getattr(env, "close", None)
+            if close_fn is not None:
+                close_fn()
 
         dataset = Dataset.from_list(train_rows)
         eval_dataset = Dataset.from_list(eval_rows) if eval_rows else None
@@ -196,5 +197,7 @@ class GymEnv(vf.MultiTurnEnv):
     @vf.cleanup
     async def cleanup_env(self, state: State) -> None:
         env = state.pop("gym_env", None)
-        if env is not None and hasattr(env, "close"):
-            env.close()
+        if env is not None:
+            close_fn = getattr(env, "close", None)
+            if close_fn is not None:
+                close_fn()

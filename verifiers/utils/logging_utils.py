@@ -100,10 +100,16 @@ def print_prompt_completions_sample(
 
         return out
 
-    def _format_error(error: Error) -> Text:
+    def _format_error(error: BaseException) -> Text:
         out = Text()
         out.append("error: ", style="bold red")
-        out.append(repr(error), style="red")
+        while True:
+            out.append(Text(repr(error), style="red"))
+            if error.__cause__ is None:
+                break
+            out.append(Text(", caused by ", style="red"))
+            error = error.__cause__
+
         return out
 
     console = Console()

@@ -1,4 +1,4 @@
-# Overview
+# Core Concepts
 
 Verifiers provides a flexible framework for defining custom interaction protocols between LLMs and environments, enabling sophisticated multi-turn reasoning, tool use, and interactive evaluation.
 

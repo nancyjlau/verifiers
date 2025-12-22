@@ -26,8 +26,8 @@ import logging
 import sys
 import textwrap
 import time
-from time import perf_counter
 import uuid
+from time import perf_counter
 from typing import Any, Callable, cast
 
 if sys.version_info < (3, 12):
@@ -54,7 +54,7 @@ from verifiers.utils.response_utils import (
     parse_response_tokens,
 )
 from verifiers.utils.tool_utils import convert_func_to_oai_tool
-from verifiers.utils.tunnel import TunnelPool
+from verifiers.utils.tunnel_utils import TunnelPool
 
 logger = logging.getLogger(__name__)
 
@@ -1169,7 +1169,7 @@ fi
         # 5. Build context
         info = state.get("info", {})
         context_data = info.get(self.context_key, None)
-        metadata = {"type": str(type(context_data))}
+        metadata: dict[str, str | int] = {"type": str(type(context_data))}
         if context_data is None:
             metadata["size"] = 0
         elif hasattr(context_data, "__len__"):
@@ -1277,7 +1277,7 @@ PY
             )
         except vf.SandboxError as e:
             # Re-raise sandbox errors (including timeouts) to fail the rollout
-            error_msg = str(e.cause) if hasattr(e, "cause") else str(e)
+            error_msg = str(e.__cause__) if e.__cause__ else str(e)
             logger.error(f"Sandbox error during code execution: {error_msg}")
             raise
 
@@ -1465,7 +1465,7 @@ PY
                     "role": "system",
                     "content": messages[0]["content"] + packages_docs + sub_tools_docs,
                 }
-            return messages
+            return cast(Messages, messages)
         else:
             # Subsequent turns: use parent implementation
             return await super().get_prompt_messages(state)

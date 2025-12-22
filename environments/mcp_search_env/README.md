@@ -1,10 +1,12 @@
-# mcp-env
+# mcp-search-env
 
 ### Overview
 
-- **Environment ID**: `mcp-env`
-- **Short description**: MCP Environment
+- **Environment ID**: `mcp-search-env`
+- **Short description**: Example environment using `vf.MCPEnv` for MCP server integration
 - **Tags**: MCP, Tools
+
+This environment demonstrates how to use the first-class `MCPEnv` from `verifiers.envs.experimental`.
 
 ### Datasets
 
@@ -23,13 +25,13 @@
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval mcp-env
+uv run vf-eval mcp-search-env
 ```
 
 Configure model and sampling:
 
 ```bash
-uv run vf-eval mcp-env   -m gpt-4.1-mini   -n 1 -r 1
+uv run vf-eval mcp-search-env   -m gpt-4.1-mini   -n 1 -r 1
 ```
 
 Notes:
@@ -46,9 +48,7 @@ Document any supported environment arguments and their meaning. Example:
 
 ### Metrics
 
-Summarize key metrics your rubric emits and how they’re interpreted.
-
-| Metric     | Meaning                                       |
-| ---------- | --------------------------------------------- |
-| `reward`   | Main scalar reward (weighted sum of criteria) |
-| `accuracy` | Exact match on target answer                  |
+| Metric         | Meaning                                       |
+| -------------- | --------------------------------------------- |
+| `reward`       | Main scalar reward (weighted sum of criteria) |
+| `judge_reward` | LLM judge score (1.0 if correct, 0.0 if not)  |

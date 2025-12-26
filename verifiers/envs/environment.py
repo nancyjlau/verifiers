@@ -255,6 +255,16 @@ class Environment(ABC):
                     },
                     **map_kwargs,
                 )
+
+        else:
+            if system_prompt is not None:
+                self.logger.warning(
+                    "Dataset already has a 'prompt' column, so the provided system_prompt will be ignored."
+                )
+            if few_shot is not None:
+                self.logger.warning(
+                    "Dataset already has a 'prompt' column, so the provided few_shot examples will be ignored."
+                )
         return dataset
 
     def _ensure_task(self, dataset: Dataset, map_kwargs: dict = {}) -> Dataset:

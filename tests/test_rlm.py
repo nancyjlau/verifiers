@@ -84,3 +84,32 @@ def test_sub_llm_timeouts_clamped_to_code_timeout(mock_sandbox_client, mock_data
 
     assert env.sub_llm_api_timeout == 4
     assert env.sub_llm_timeout == 4
+
+
+def test_install_wait_scales_with_packages(mock_sandbox_client, mock_dataset):
+    with (
+        patch("verifiers.envs.sandbox_env.AsyncSandboxClient") as mock_client_cls,
+        patch("verifiers.envs.sandbox_env.CreateSandboxRequest"),
+    ):
+        mock_client_cls.return_value = mock_sandbox_client
+        env = RLMEnv(
+            dataset=mock_dataset,
+            pip_install_packages="numpy scipy",
+            max_startup_wait_seconds=30,
+        )
+
+    assert env._compute_install_wait_seconds() == 90
+
+
+@pytest.mark.asyncio
+async def test_start_worker_waits_for_install_done(rlm_env):
+    rlm_env._execute_command_with_retry = AsyncMock(
+        return_value=MagicMock(stdout="", stderr="")
+    )
+    rlm_env._wait_for_install_done = AsyncMock()
+    rlm_env._wait_for_worker_ready = AsyncMock()
+
+    state = {"sandbox_id": "sandbox_123", "interception_url": "http://test"}
+    await rlm_env._start_worker(state)
+
+    rlm_env._wait_for_install_done.assert_awaited_once()

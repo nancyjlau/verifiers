@@ -300,11 +300,10 @@ _RLM_START_COMMAND_TEMPLATE = textwrap.dedent(
     command_fifo="{command_fifo}"
     response_fifo="{response_fifo}"
     ready_flag="{ready_flag}"
+    install_done_flag="{install_done_flag}"
     worker_path="{worker_path}"
 
-    rm -f "$command_fifo" "$response_fifo" "$ready_flag"
-
-    pip install -q requests {pip_install_packages}
+    rm -f "$command_fifo" "$response_fifo" "$ready_flag" "$install_done_flag"
 
     # Write worker script but do NOT start it yet
     # Worker will be started by setup_state after context/env vars are set
@@ -315,13 +314,20 @@ from pathlib import Path
 Path("{worker_path}").write_bytes(base64.b64decode("{worker_b64}"))
 PY
 
+    pip install -q requests {pip_install_packages}
+    touch "$install_done_flag"
+
     tail -f /dev/null
     '
     """
 )
 
 
-def _make_ready_wait_script(ready_flag: str, max_wait_seconds: int) -> str:
+def _make_ready_wait_script(
+    ready_flag: str,
+    max_wait_seconds: int,
+    error_message: str = "RLM worker failed to start",
+) -> str:
     """Generate a ready wait script with configurable timeout."""
     # Each iteration sleeps 0.05 seconds, so calculate iterations needed
     iterations = max(1, int(max_wait_seconds / 0.05))
@@ -334,7 +340,7 @@ def _make_ready_wait_script(ready_flag: str, max_wait_seconds: int) -> str:
           fi
           sleep 0.05
         done
-        echo "RLM worker failed to start" >&2
+        echo "{error_message}" >&2
         exit 1
         '
         """
@@ -439,6 +445,7 @@ class RLMEnv(SandboxEnv):
     _COMMAND_FIFO = "/tmp/rlm_cmd"
     _RESPONSE_FIFO = "/tmp/rlm_res"
     _READY_FLAG = "/tmp/rlm_ready"
+    _INSTALL_DONE_FLAG = "/tmp/rlm_install_done"
     _CONTEXT_FILE = "/tmp/rlm_context.json"
     _ANSWER_FILE = "/tmp/rlm_answer.json"
 
@@ -507,6 +514,7 @@ class RLMEnv(SandboxEnv):
             command_fifo=self._COMMAND_FIFO,
             response_fifo=self._RESPONSE_FIFO,
             ready_flag=self._READY_FLAG,
+            install_done_flag=self._INSTALL_DONE_FLAG,
             worker_path=self._WORKER_PATH,
             worker_b64=worker_b64,
             pip_install_packages=pip_install_packages,
@@ -569,6 +577,13 @@ class RLMEnv(SandboxEnv):
             )
 
         return api_timeout, worker_timeout
+
+    def _compute_install_wait_seconds(self) -> int:
+        """Estimate how long to wait for pip installs based on package count."""
+        packages = [p.strip() for p in self.pip_install_packages.split() if p.strip()]
+        package_count = len(packages) + 1  # Always includes requests
+        estimated_seconds = 30 * package_count
+        return max(self.max_startup_wait_seconds, estimated_seconds)
 
     def _generate_packages_documentation(self) -> str:
         """Generate documentation for installed packages to include in system prompt."""
@@ -1078,9 +1093,9 @@ class RLMEnv(SandboxEnv):
         interception_url = state["interception_url"]
 
         sub_llm_timeout = self.sub_llm_timeout
-        # Calculate max wait iterations for worker script (written AFTER pip install completes)
-        # This can take 30-60+ seconds for heavy packages like numpy, sympy, scipy
+        # Calculate max wait iterations for worker script creation
         script_wait_iterations = max(1, int(self.max_startup_wait_seconds / 0.1))
+        await self._wait_for_install_done(sandbox_id)
         start_worker_cmd = f"""
 export RLM_INTERCEPTION_URL="{interception_url}"
 export RLM_SUB_MODEL="{self.sub_model or state.get("model", "")}"
@@ -1098,16 +1113,16 @@ for i in $(seq 1 {script_wait_iterations}); do
     sleep 0.1
 done
 
-if [ ! -f "{self._WORKER_PATH}" ]; then
-    echo "Worker script not found - pip install may have failed or timed out" >&2
-    exit 1
-fi
+        if [ ! -f "{self._WORKER_PATH}" ]; then
+            echo "Worker script not found - pip install may have failed or timed out" >&2
+            exit 1
+        fi
 
-# Small delay to ensure filesystem is fully synced before reading script
-sleep 0.2
+        # Small delay to ensure filesystem is fully synced before reading script
+        sleep 0.2
 
-# Start the worker
-nohup python -u {self._WORKER_PATH} >> /tmp/rlm_worker.log 2>&1 &
+        # Start the worker
+        nohup python -u {self._WORKER_PATH} >> /tmp/rlm_worker.log 2>&1 &
 """
         # Timeout needs to account for pip install wait + worker startup
         start_worker_timeout = self.max_startup_wait_seconds + 30
@@ -1241,7 +1256,9 @@ nohup python -u {self._WORKER_PATH} >> /tmp/rlm_worker.log 2>&1 &
     async def _wait_for_worker_ready(self, sandbox_id: str) -> None:
         """Wait for worker to signal ready."""
         wait_script = _make_ready_wait_script(
-            self._READY_FLAG, self.max_startup_wait_seconds
+            self._READY_FLAG,
+            self.max_startup_wait_seconds,
+            error_message="RLM worker failed to start",
         )
         # Use max_startup_wait_seconds as timeout (+ buffer for script overhead)
         timeout = self.max_startup_wait_seconds + 10
@@ -1262,6 +1279,24 @@ nohup python -u {self._WORKER_PATH} >> /tmp/rlm_worker.log 2>&1 &
             raise vf.SandboxError() from Exception(
                 f"RLM worker failed to start: {debug_result.stdout[:500]}"
             )
+
+    async def _wait_for_install_done(self, sandbox_id: str) -> None:
+        """Wait for pip installs to finish before starting the worker."""
+        install_wait_seconds = self._compute_install_wait_seconds()
+        wait_script = _make_ready_wait_script(
+            self._INSTALL_DONE_FLAG,
+            install_wait_seconds,
+            error_message="RLM pip install did not complete",
+        )
+        timeout = install_wait_seconds + 10
+        result = await self._execute_command_with_retry(
+            sandbox_id, wait_script, timeout=timeout
+        )
+        if (
+            "pip install did not complete" in result.stdout
+            or "pip install did not complete" in (result.stderr or "")
+        ):
+            raise vf.SandboxError() from Exception("RLM pip install did not complete")
 
     # =========================================================================
     # Code Execution

@@ -72,3 +72,15 @@ async def test_execute_code_timeout_restarts_sandbox(rlm_env):
     rlm_env._recreate_sandbox.assert_awaited_once()
     rlm_env._prepare_sandbox_and_start_worker.assert_awaited_once()
     assert state["_exec_seq"] == 0
+
+
+def test_sub_llm_timeouts_clamped_to_code_timeout(mock_sandbox_client, mock_dataset):
+    with (
+        patch("verifiers.envs.sandbox_env.AsyncSandboxClient") as mock_client_cls,
+        patch("verifiers.envs.sandbox_env.CreateSandboxRequest"),
+    ):
+        mock_client_cls.return_value = mock_sandbox_client
+        env = RLMEnv(dataset=mock_dataset, code_execution_timeout=5)
+
+    assert env.sub_llm_api_timeout == 4
+    assert env.sub_llm_timeout == 4

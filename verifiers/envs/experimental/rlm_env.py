@@ -481,7 +481,10 @@ class RLMEnv(SandboxEnv):
         self.abort_on_code_timeout = abort_on_code_timeout
         # Server-side timeout for LLM API calls (shorter than sandbox HTTP timeout)
         # This ensures server responds before sandbox worker's HTTP request times out
-        self.sub_llm_api_timeout = max(10, int(self.code_execution_timeout * 0.8))
+        (
+            self.sub_llm_api_timeout,
+            self.sub_llm_timeout,
+        ) = self._compute_sub_llm_timeouts()
 
         # Convert sub_tools to OAI format (reusing existing infrastructure)
         self.sub_oai_tools = [convert_func_to_oai_tool(tool) for tool in self.sub_tools]
@@ -544,6 +547,28 @@ class RLMEnv(SandboxEnv):
     # =========================================================================
     # Sub-Agent Tool Infrastructure
     # =========================================================================
+
+    def _compute_sub_llm_timeouts(self) -> tuple[int, int]:
+        """Compute sub-LLM timeouts based on the overall code execution timeout."""
+        code_timeout = max(1, int(self.code_execution_timeout))
+        min_timeout = min(10, max(1, code_timeout - 1))
+
+        api_timeout = max(min_timeout, int(code_timeout * 0.8))
+        worker_timeout = max(min_timeout, int(code_timeout * 0.9))
+
+        if code_timeout > 1:
+            api_timeout = min(api_timeout, code_timeout - 1)
+            worker_timeout = min(worker_timeout, code_timeout - 1)
+
+        api_timeout = min(api_timeout, worker_timeout)
+
+        if code_timeout < 10:
+            logger.warning(
+                "code_execution_timeout=%s is low; sub-LLM calls may be unreliable",
+                code_timeout,
+            )
+
+        return api_timeout, worker_timeout
 
     def _generate_packages_documentation(self) -> str:
         """Generate documentation for installed packages to include in system prompt."""
@@ -1052,7 +1077,7 @@ class RLMEnv(SandboxEnv):
         sandbox_id = state["sandbox_id"]
         interception_url = state["interception_url"]
 
-        sub_llm_timeout = max(10, int(self.code_execution_timeout * 0.9))
+        sub_llm_timeout = self.sub_llm_timeout
         # Calculate max wait iterations for worker script (written AFTER pip install completes)
         # This can take 30-60+ seconds for heavy packages like numpy, sympy, scipy
         script_wait_iterations = max(1, int(self.max_startup_wait_seconds / 0.1))

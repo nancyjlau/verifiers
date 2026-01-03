@@ -707,15 +707,43 @@ class RLMEnv(SandboxEnv):
                 "tool_call_id": tool_call_id,
             }
 
+    def _normalize_message_content(self, messages: list[dict]) -> list[dict]:
+        """Normalize message content fields to formats the API accepts.
+
+        The API expects content to be: string, array of objects, or None.
+        Handles several malformed cases:
+        1. Content is a nested message dict (has 'role' and 'content' keys) - extract inner content
+        2. Content is a content part object (has 'type' key) - wrap in array
+        """
+        normalized = []
+        for msg in messages:
+            msg_copy = dict(msg)
+            content = msg_copy.get("content")
+
+            if content is not None and isinstance(content, dict):
+                # Check if content is a nested message dict (has 'role' and 'content' keys)
+                # This happens when model passes message dicts to llm_batch instead of strings
+                if "role" in content and "content" in content:
+                    msg_copy["content"] = content["content"]
+                elif "type" in content:
+                    # Content part object (e.g. {"type": "text", "text": "..."}) - wrap in array
+                    msg_copy["content"] = [content]
+                else:
+                    # Unknown dict structure - try wrapping in array as fallback
+                    msg_copy["content"] = [content]
+            normalized.append(msg_copy)
+        return normalized
+
     async def _call_sub_llm_api(
         self, client: Any, model: str, messages: list[dict], tools: list | None = None
     ) -> Any | None:
         """Make a single sub-LLM API call with timeout. Returns None on timeout."""
+        normalized_messages = self._normalize_message_content(messages)
         try:
             return await asyncio.wait_for(
                 client.chat.completions.create(
                     model=model,
-                    messages=messages,
+                    messages=normalized_messages,
                     tools=tools,
                     logprobs=self._sub_llm_supports_logprobs or None,
                 ),
@@ -982,6 +1010,7 @@ class RLMEnv(SandboxEnv):
                         reward=None,
                         advantage=None,
                         is_truncated=is_truncated,
+                        trajectory_id=f"{batch_id}_{request_id}",
                         extras={
                             "is_sub_llm_call": True,
                             "parent_turn": parent_turn,
@@ -1672,6 +1701,18 @@ PY
         )
         state["main_rlm_completion_tokens"] = sum(
             self._extract_tokens(s.get("response"))[1] for s in main_steps
+        )
+
+        # REPL call timing metrics (already tracked in tool_call_timings)
+        tool_timings = state.get("tool_call_timings", [])
+        state["repl_total_time_seconds"] = (
+            sum(t["execution_seconds"] for t in tool_timings) if tool_timings else 0.0
+        )
+        state["repl_call_count"] = len(tool_timings)
+        state["repl_mean_time_seconds"] = (
+            (state["repl_total_time_seconds"] / len(tool_timings))
+            if tool_timings
+            else 0.0
         )
 
         # Release tunnel

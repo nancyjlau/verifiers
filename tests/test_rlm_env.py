@@ -1262,6 +1262,8 @@ class TestSubLLMCleanup:
             tokens=None,
             reward=None,
             advantage=None,
+            is_truncated=False,
+            trajectory_id="sub_batch1_req1",
             extras={"is_sub_llm_call": True, "timestamp": 1.0},
         )
         sub_step2 = TrajectoryStep(
@@ -1271,6 +1273,8 @@ class TestSubLLMCleanup:
             tokens=None,
             reward=None,
             advantage=None,
+            is_truncated=False,
+            trajectory_id="sub_batch1_req2",
             extras={"is_sub_llm_call": True, "timestamp": 2.0},
         )
         rlm_env.active_rollouts[rollout_id] = {
@@ -1286,6 +1290,8 @@ class TestSubLLMCleanup:
             tokens=None,
             reward=None,
             advantage=None,
+            is_truncated=False,
+            trajectory_id="main_trajectory",
             extras={},
         )
         state = {"rollout_id": rollout_id, "trajectory": [main_step]}
@@ -1324,6 +1330,8 @@ class TestSubLLMCleanup:
                 tokens=None,
                 reward=None,
                 advantage=None,
+                is_truncated=False,
+                trajectory_id="sub_batch1_req1",
                 extras={"is_sub_llm_call": True, "timestamp": 1.0},
             )
             env.active_rollouts[rollout_id] = {
@@ -1338,6 +1346,8 @@ class TestSubLLMCleanup:
                 tokens=None,
                 reward=None,
                 advantage=None,
+                is_truncated=False,
+                trajectory_id="main_trajectory",
                 extras={},
             )
             state = {"rollout_id": rollout_id, "trajectory": [main_step]}

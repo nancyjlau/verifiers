@@ -336,24 +336,24 @@ from typing import Tuple
 
 class MyGameEnv(vf.MultiTurnEnv):
 
-    async def env_response(self, messages: Messages, state: State) -> Tuple[Messages, State]:
+    async def env_response(self, messages: Messages, state: State) -> Messages:
         """Define how the environment responds."""
         last_msg = messages[-1]
         if last_msg["role"] != "assistant":
-            return [], state
+            return []
 
         player_action = last_msg["content"]
         if self.is_game_over(state):
             state["done"] = True
-            return [{"role": "user", "content": "Game over!"}], state
+            return [{"role": "user", "content": "Game over!"}]
 
         state = self.update_state(state, player_action)
         feedback = self.get_game_feedback(state)
-        return [{"role": "user", "content": feedback}], state
+        return [{"role": "user", "content": feedback}]
 
-    async def is_completed(self, messages: Messages, state: State) -> bool:
-        if await super().is_completed(messages, state):
-            return True
+    @vf.stop
+    async def game_over(self, state: State) -> bool:
+        """Check if game is complete."""
         return state.get("solved", False) or state.get("failed", False)
 ```
 

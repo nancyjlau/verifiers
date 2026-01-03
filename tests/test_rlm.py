@@ -6,6 +6,7 @@ import pytest
 from datasets import Dataset
 from prime_sandboxes import CommandTimeoutError
 
+from verifiers.envs.experimental import rlm_env as rlm_module
 from verifiers.envs.experimental.rlm_env import RLMEnv
 
 
@@ -113,3 +114,10 @@ async def test_start_worker_waits_for_install_done(rlm_env):
     await rlm_env._start_worker(state)
 
     rlm_env._wait_for_install_done.assert_awaited_once()
+
+
+def test_worker_timeout_clamped_to_sandbox_timeout():
+    assert (
+        "SUB_LLM_TIMEOUT = min(SUB_LLM_TIMEOUT, SANDBOX_TIMEOUT)"
+        in rlm_module._RLM_WORKER_SCRIPT
+    )

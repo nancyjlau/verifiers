@@ -106,6 +106,8 @@ _RLM_WORKER_SCRIPT = textwrap.dedent(
     MAX_SUB_LLM_PARALLELISM = int(os.environ.get("RLM_MAX_SUB_LLM_PARALLELISM", "5"))
     SUB_LLM_TIMEOUT = int(os.environ.get("RLM_SUB_LLM_TIMEOUT", "300"))
     SANDBOX_TIMEOUT = int(os.environ.get("RLM_SANDBOX_TIMEOUT", "120"))
+    if SANDBOX_TIMEOUT > 0:
+        SUB_LLM_TIMEOUT = min(SUB_LLM_TIMEOUT, SANDBOX_TIMEOUT)
 
     def ensure_fifo(path: str) -> None:
         if os.path.exists(path):
@@ -423,8 +425,9 @@ class RLMEnv(SandboxEnv):
         system_prompt: Custom system prompt (default: RLM standard prompt)
         interception_host: Optional hostname/IP for interception server (auto-tunneled if not set)
         interception_port: Port for interception server (default: 8766)
-        pip_install_packages: Space-separated packages to install (default: "requests")
-        max_startup_wait_seconds: Maximum seconds to wait for worker startup (default: 30)
+        pip_install_packages: Space-separated packages to install in addition to requests
+                   (default: "")
+        max_startup_wait_seconds: Maximum seconds to wait for worker startup (default: 120)
         include_sub_llm_in_trajectory: Whether to include sub-LLM calls as trajectory steps.
                    When True (default), sub-LLM turns are prepended to the trajectory as
                    TrajectoryStep objects with tokens, enabling training on sub-LLM calls.

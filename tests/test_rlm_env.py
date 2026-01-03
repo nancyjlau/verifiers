@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from datasets import Dataset
+from prime_sandboxes import CommandTimeoutError
 
+from verifiers.envs.experimental import rlm_env as rlm_module
 from verifiers.envs.experimental.rlm_env import RLMEnv
 
 
@@ -236,6 +238,77 @@ class TestExtractTunnelUrlFromLine:
         line = "something.trycloudflare.com without https"
         url = extract_tunnel_url_from_line(line)
         assert url is None
+
+
+@pytest.mark.asyncio
+async def test_execute_code_timeout_restarts_sandbox(rlm_env):
+    rlm_env.abort_on_code_timeout = False
+    rlm_env.code_execution_timeout = 1
+    rlm_env.sandbox_client.execute_command = AsyncMock(
+        side_effect=CommandTimeoutError("sandbox_123", "command", 1)
+    )
+    rlm_env._recreate_sandbox = AsyncMock(side_effect=lambda state: state)
+    rlm_env._prepare_sandbox_and_start_worker = AsyncMock()
+
+    state = {
+        "sandbox_id": "sandbox_123",
+        "rlm_context": {"input_data": None, "input_data_metadata": {}},
+    }
+    result = await rlm_env._execute_code("sandbox_123", "print(1)", state)
+
+    assert result["status"] == "error"
+    assert "sandbox was restarted" in result["result"].lower()
+    rlm_env._recreate_sandbox.assert_awaited_once()
+    rlm_env._prepare_sandbox_and_start_worker.assert_awaited_once()
+    assert state["_exec_seq"] == 0
+
+
+def test_sub_llm_timeouts_clamped_to_code_timeout(mock_sandbox_client, mock_dataset):
+    with (
+        patch("verifiers.envs.sandbox_env.AsyncSandboxClient") as mock_client_cls,
+        patch("verifiers.envs.sandbox_env.CreateSandboxRequest"),
+    ):
+        mock_client_cls.return_value = mock_sandbox_client
+        env = RLMEnv(dataset=mock_dataset, code_execution_timeout=5)
+
+    assert env.sub_llm_api_timeout == 4
+    assert env.sub_llm_timeout == 4
+
+
+def test_install_wait_scales_with_packages(mock_sandbox_client, mock_dataset):
+    with (
+        patch("verifiers.envs.sandbox_env.AsyncSandboxClient") as mock_client_cls,
+        patch("verifiers.envs.sandbox_env.CreateSandboxRequest"),
+    ):
+        mock_client_cls.return_value = mock_sandbox_client
+        env = RLMEnv(
+            dataset=mock_dataset,
+            pip_install_packages="numpy scipy",
+            max_startup_wait_seconds=30,
+        )
+
+    assert env._compute_install_wait_seconds() == 90
+
+
+@pytest.mark.asyncio
+async def test_start_worker_waits_for_install_done(rlm_env):
+    rlm_env._execute_command_with_retry = AsyncMock(
+        return_value=MagicMock(stdout="", stderr="")
+    )
+    rlm_env._wait_for_install_done = AsyncMock()
+    rlm_env._wait_for_worker_ready = AsyncMock()
+
+    state = {"sandbox_id": "sandbox_123", "interception_url": "http://test"}
+    await rlm_env._start_worker(state)
+
+    rlm_env._wait_for_install_done.assert_awaited_once()
+
+
+def test_worker_timeout_clamped_to_sandbox_timeout():
+    assert (
+        "SUB_LLM_TIMEOUT = min(SUB_LLM_TIMEOUT, SANDBOX_TIMEOUT)"
+        in rlm_module._RLM_WORKER_SCRIPT
+    )
 
 
 # =============================================================================

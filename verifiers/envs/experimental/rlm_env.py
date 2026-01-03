@@ -1242,6 +1242,22 @@ nohup python -u {self._WORKER_PATH} >> /tmp/rlm_worker.log 2>&1 &
     # Code Execution
     # =========================================================================
 
+    async def _recover_from_code_timeout(self, state: State) -> bool:
+        """Attempt to recover from a code execution timeout by recreating the sandbox."""
+        context_dict = state.get("rlm_context")
+        if not context_dict:
+            logger.error("Cannot recover from timeout: missing rlm_context in state")
+            return False
+        try:
+            state = await self._recreate_sandbox(state)
+            await self._prepare_sandbox_and_start_worker(state, context_dict)
+        except Exception as e:
+            logger.error(f"Failed to recover from code timeout: {e}")
+            return False
+        state["rlm_worker_ready"] = True
+        state["_exec_seq"] = 0
+        return True
+
     async def _execute_code(
         self, sandbox_id: str, code: str, state: State
     ) -> dict[str, Any]:
@@ -1282,14 +1298,22 @@ PY
             if self.abort_on_code_timeout:
                 # Abort rollout immediately on timeout
                 raise vf.SandboxError() from e
+            recovered = await self._recover_from_code_timeout(state)
+            recovery_note = (
+                " The sandbox was restarted and the REPL state was reset."
+                if recovered
+                else " Failed to restart the sandbox; the REPL may be unusable."
+            )
             # Return error to model so it can try more efficient code
             return {
                 "status": "error",
                 "stdout": "",
                 "stderr": "",
-                "result": f"Code execution timed out after {self.code_execution_timeout} seconds. "
-                "Your code may be too slow - consider a more efficient algorithm or "
-                "breaking the computation into smaller steps.",
+                "result": (
+                    f"Code execution timed out after {self.code_execution_timeout} seconds."
+                    f"{recovery_note} Your code may be too slow - consider a more "
+                    "efficient algorithm or breaking the computation into smaller steps."
+                ),
                 "answer": {"ready": False, "content": ""},
             }
         except Exception as e:

@@ -762,6 +762,38 @@ class TestContextLimitWarning:
 
         assert "[CONTEXT LIMIT WARNING]" not in output
 
+    @pytest.mark.asyncio
+    async def test_warning_uses_last_main_step(self, rlm_env):
+        """Uses the last main-model step even if a sub-LLM step is last."""
+        rlm_env.max_seq_len = 10000
+        rlm_env._execute_code = AsyncMock(
+            return_value={
+                "status": "ok",
+                "stdout": "output",
+                "stderr": "",
+                "result": None,
+                "execution_count": 1,
+                "answer": {"ready": False, "content": ""},
+            }
+        )
+
+        main_response = MagicMock()
+        main_response.usage = MagicMock(prompt_tokens=8500)
+        sub_response = MagicMock()
+        sub_response.usage = MagicMock(prompt_tokens=10)
+
+        state = {
+            "trajectory": [
+                {"response": main_response, "extras": {}},
+                {"response": sub_response, "extras": {"is_sub_llm_call": True}},
+            ],
+            "context_warning_sent": False,
+        }
+
+        output = await rlm_env.call_python_repl("print('test')", "sandbox_123", state)
+
+        assert "[CONTEXT LIMIT WARNING]" in output
+
 
 class TestPromptTooLongStopCondition:
     """Tests for prompt_too_long stop condition."""

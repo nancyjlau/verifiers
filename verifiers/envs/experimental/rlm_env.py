@@ -1677,9 +1677,17 @@ PY
 
         # Inject context limit warning if approaching limit
         if self.max_seq_len and not state.get("context_warning_sent"):
-            # Get prompt token count from latest trajectory response
+            # Get prompt token count from latest main-model trajectory response
             trajectory = state.get("trajectory", [])
-            response = trajectory[-1].get("response") if trajectory else None
+            last_main = next(
+                (
+                    step
+                    for step in reversed(trajectory)
+                    if not step.get("extras", {}).get("is_sub_llm_call")
+                ),
+                None,
+            )
+            response = last_main.get("response") if last_main else None
             usage = getattr(response, "usage", None) if response else None
             prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0 if usage else 0
             warning_threshold = int(self.max_seq_len * self.context_warning_threshold)

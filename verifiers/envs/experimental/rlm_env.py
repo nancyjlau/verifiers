@@ -1081,13 +1081,23 @@ class RLMEnv(SandboxEnv):
             # Extract boxed answer for response to sandbox
             boxed_content = extract_boxed_answer(final_content)
 
-            # Build TrajectorySteps if enabled
-            if self.include_sub_llm_in_trajectory:
-                parent_turn = context.get("current_turn", 0)
-                timestamp = time.time()
+            parent_turn = context.get("current_turn", 0)
+            timestamp = time.time()
 
-                total_sub_turns = len(turns)
-                for sub_turn_index, turn in enumerate(turns):
+            total_sub_turns = len(turns)
+            for sub_turn_index, turn in enumerate(turns):
+                extras = {
+                    "is_sub_llm_call": True,
+                    "parent_turn": parent_turn,
+                    "batch_id": batch_id,
+                    "request_id": request_id,
+                    "sub_turn_index": sub_turn_index,
+                    "total_sub_turns": total_sub_turns,
+                    "timestamp": timestamp,
+                    "tool_call_count": turn["tool_call_count"],
+                }
+
+                if self.include_sub_llm_in_trajectory:
                     # Parse tokens from response
                     tokens = await parse_response_tokens(
                         turn["response"], "chat", self.max_seq_len
@@ -1113,22 +1123,25 @@ class RLMEnv(SandboxEnv):
                         advantage=None,
                         is_truncated=is_truncated,
                         trajectory_id=f"{batch_id}_{request_id}",
-                        extras={
-                            "is_sub_llm_call": True,
-                            "parent_turn": parent_turn,
-                            "batch_id": batch_id,
-                            "request_id": request_id,
-                            "sub_turn_index": sub_turn_index,
-                            "total_sub_turns": total_sub_turns,
-                            "timestamp": timestamp,
-                            "tool_call_count": turn["tool_call_count"],
-                        },
+                        extras=extras,
                     )
                     if state_ref is not None:
-                        if self.include_sub_llm_in_trajectory:
-                            await self.add_trajectory_step(state_ref, trajectory_step)
-                        else:
-                            update_rlm_metrics_from_step(state_ref, trajectory_step)
+                        await self.add_trajectory_step(state_ref, trajectory_step)
+                else:
+                    if state_ref is None:
+                        continue
+                    trajectory_step = TrajectoryStep(
+                        prompt=cast(Messages, turn["prompt_messages"]),
+                        completion=[],
+                        response=turn["response"],
+                        tokens=None,
+                        reward=None,
+                        advantage=None,
+                        is_truncated=False,
+                        trajectory_id=f"{batch_id}_{request_id}",
+                        extras=extras,
+                    )
+                    update_rlm_metrics_from_step(state_ref, trajectory_step)
 
             # Build response dict for sandbox
             response_dict = {

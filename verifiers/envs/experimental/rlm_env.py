@@ -129,8 +129,9 @@ def update_rlm_metrics_from_step(state: State, step: TrajectoryStep) -> None:
         call_ids: dict[str, bool] = state.get("_rlm_sub_llm_call_ids", {})
         batch_counts: dict[str, int] = state.get("_rlm_sub_llm_batch_counts", {})
 
-        if batch_id and request_id:
-            key = f"{batch_id}:{request_id}"
+        if batch_id:
+            request_id_norm = request_id if request_id not in (None, "") else "_missing"
+            key = f"{batch_id}:{request_id_norm}"
             if key not in call_ids:
                 call_ids[key] = True
                 state["sub_llm_call_count"] += 1
@@ -138,8 +139,6 @@ def update_rlm_metrics_from_step(state: State, step: TrajectoryStep) -> None:
         else:
             # Fallback: treat each turn as its own call if identifiers are missing.
             state["sub_llm_call_count"] += 1
-            if batch_id:
-                batch_counts[batch_id] = batch_counts.get(batch_id, 0) + 1
 
         state["_rlm_sub_llm_call_ids"] = call_ids
         state["_rlm_sub_llm_batch_counts"] = batch_counts

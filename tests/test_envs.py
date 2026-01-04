@@ -15,6 +15,8 @@ SKIPPED_ENVS = [
     #                 ~~~~~~~~~~^^^^^^^^^^^^^^
     # KeyError: 'example_id'
     "continuation_quality",
+    # Slow expensive first-time setup
+    "wiki_search",
 ]
 
 

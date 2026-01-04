@@ -360,7 +360,7 @@ async def add_model_response(
         reward=None,
         advantage=None,
         is_truncated=False,
-        trajectory_id=state["current_trajectory_id"],
+        trajectory_id=state["trajectory_id"],
         extras={},
     )
     state["trajectory"].append(trajectory_step)

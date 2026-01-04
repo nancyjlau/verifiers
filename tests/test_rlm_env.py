@@ -762,6 +762,38 @@ class TestContextLimitWarning:
 
         assert "[CONTEXT LIMIT WARNING]" not in output
 
+    @pytest.mark.asyncio
+    async def test_warning_uses_last_main_step(self, rlm_env):
+        """Uses the last main-model step even if a sub-LLM step is last."""
+        rlm_env.max_seq_len = 10000
+        rlm_env._execute_code = AsyncMock(
+            return_value={
+                "status": "ok",
+                "stdout": "output",
+                "stderr": "",
+                "result": None,
+                "execution_count": 1,
+                "answer": {"ready": False, "content": ""},
+            }
+        )
+
+        main_response = MagicMock()
+        main_response.usage = MagicMock(prompt_tokens=8500)
+        sub_response = MagicMock()
+        sub_response.usage = MagicMock(prompt_tokens=10)
+
+        state = {
+            "trajectory": [
+                {"response": main_response, "extras": {}},
+                {"response": sub_response, "extras": {"is_sub_llm_call": True}},
+            ],
+            "context_warning_sent": False,
+        }
+
+        output = await rlm_env.call_python_repl("print('test')", "sandbox_123", state)
+
+        assert "[CONTEXT LIMIT WARNING]" in output
+
 
 class TestPromptTooLongStopCondition:
     """Tests for prompt_too_long stop condition."""
@@ -1297,71 +1329,85 @@ class TestSubLLMMetricsWithTools:
 
 
 class TestSubLLMCleanup:
-    """Tests for sub-LLM cleanup."""
+    """Tests for sub-LLM trajectory insertion behavior."""
 
     @pytest.mark.asyncio
-    async def test_prepends_trajectory_steps_during_cleanup(self, rlm_env):
-        """Prepends sub-LLM trajectory steps to main trajectory during cleanup."""
+    async def test_adds_steps_immediately(self, rlm_env):
+        """Adds sub-LLM steps immediately via add_trajectory_step."""
         from verifiers.types import TrajectoryStep
 
         rollout_id = "rlm_test123"
-        # Create mock sub-LLM trajectory steps
-        sub_step1 = TrajectoryStep(
-            prompt=[{"role": "user", "content": "sub prompt 1"}],
-            completion=[{"role": "assistant", "content": "sub response 1"}],
-            response=None,
-            tokens=None,
-            reward=None,
-            advantage=None,
-            is_truncated=False,
-            trajectory_id="sub_batch1_req1",
-            extras={"is_sub_llm_call": True, "timestamp": 1.0},
-        )
-        sub_step2 = TrajectoryStep(
-            prompt=[{"role": "user", "content": "sub prompt 2"}],
-            completion=[{"role": "assistant", "content": "sub response 2"}],
-            response=None,
-            tokens=None,
-            reward=None,
-            advantage=None,
-            is_truncated=False,
-            trajectory_id="sub_batch1_req2",
-            extras={"is_sub_llm_call": True, "timestamp": 2.0},
-        )
+        state = {"trajectory": [], "trajectory_id": "root"}
         rlm_env.active_rollouts[rollout_id] = {
             "client": MagicMock(),
-            "sub_llm_trajectory_steps": [sub_step2, sub_step1],  # Out of order
+            "model": "test-model",
+            "sub_model": "test-model",
+            "state": state,
         }
 
-        # Main trajectory step
-        main_step = TrajectoryStep(
-            prompt=[{"role": "user", "content": "main prompt"}],
-            completion=[{"role": "assistant", "content": "main response"}],
-            response=None,
-            tokens=None,
-            reward=None,
-            advantage=None,
-            is_truncated=False,
-            trajectory_id="main_trajectory",
-            extras={},
+        mock_turn_1 = {
+            "prompt_messages": [],
+            "response": MagicMock(),
+            "tool_call_count": 0,
+        }
+        mock_turn_2 = {
+            "prompt_messages": [],
+            "response": MagicMock(),
+            "tool_call_count": 0,
+        }
+        rlm_env._run_sub_llm = AsyncMock(
+            return_value={
+                "final_content": "done",
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "tool_call_count": 0,
+                "num_turns": 2,
+                "max_turns_reached": False,
+                "turns": [mock_turn_1, mock_turn_2],
+            }
         )
-        state = {"rollout_id": rollout_id, "trajectory": [main_step]}
-        await rlm_env.cleanup_rlm_state(state)
 
-        # Trajectory should have sub-LLM steps (sorted by timestamp) prepended
-        assert len(state["trajectory"]) == 3
-        assert state["trajectory"][0]["extras"].get("is_sub_llm_call") is True
-        assert (
-            state["trajectory"][0]["extras"]["timestamp"] == 1.0
-        )  # First by timestamp
-        assert state["trajectory"][1]["extras"]["timestamp"] == 2.0
-        assert state["trajectory"][2]["extras"].get("is_sub_llm_call") is not True
+        with (
+            patch.object(
+                rlm_module, "parse_response_tokens", new=AsyncMock(return_value=None)
+            ),
+            patch.object(
+                rlm_module,
+                "parse_response_messages",
+                new=AsyncMock(return_value=[{"role": "assistant", "content": "ok"}]),
+            ),
+            patch.object(
+                rlm_module, "parse_is_truncated", new=AsyncMock(return_value=False)
+            ),
+        ):
+            mock_request = MagicMock()
+            mock_request.match_info = {"rollout_id": rollout_id}
+            mock_request.json = AsyncMock(
+                return_value={
+                    "messages": [{"role": "user", "content": "test"}],
+                    "_batch_id": "batch1",
+                    "_request_id": "req1",
+                }
+            )
+
+            recorded: list[TrajectoryStep] = []
+
+            async def _add_step(state, step):
+                recorded.append(step)
+                state["trajectory"].append(step)
+
+            rlm_env.add_trajectory_step = AsyncMock(side_effect=_add_step)
+
+            await rlm_env._handle_sub_llm_request(mock_request)
+
+        assert len(state["trajectory"]) == 2
+        assert recorded == state["trajectory"]
+        assert state["trajectory"][0]["extras"]["sub_turn_index"] == 0
+        assert state["trajectory"][1]["extras"]["sub_turn_index"] == 1
 
     @pytest.mark.asyncio
-    async def test_no_prepend_when_disabled(self, mock_sandbox_client, mock_dataset):
-        """Does not prepend sub-LLM steps when include_sub_llm_in_trajectory=False."""
-        from verifiers.types import TrajectoryStep
-
+    async def test_no_add_when_disabled(self, mock_sandbox_client, mock_dataset):
+        """Does not add sub-LLM steps when include_sub_llm_in_trajectory=False."""
         with (
             patch("verifiers.envs.sandbox_env.AsyncSandboxClient") as mock_client_cls,
             patch("verifiers.envs.sandbox_env.CreateSandboxRequest"),
@@ -1374,39 +1420,62 @@ class TestSubLLMCleanup:
             env.sandbox_client = mock_sandbox_client
 
             rollout_id = "rlm_test123"
-            sub_step = TrajectoryStep(
-                prompt=[{"role": "user", "content": "sub prompt"}],
-                completion=[{"role": "assistant", "content": "sub response"}],
-                response=None,
-                tokens=None,
-                reward=None,
-                advantage=None,
-                is_truncated=False,
-                trajectory_id="sub_batch1_req1",
-                extras={"is_sub_llm_call": True, "timestamp": 1.0},
-            )
+            state = {"trajectory": [], "trajectory_id": "root"}
             env.active_rollouts[rollout_id] = {
                 "client": MagicMock(),
-                "sub_llm_trajectory_steps": [sub_step],
+                "model": "test-model",
+                "sub_model": "test-model",
+                "state": state,
             }
 
-            main_step = TrajectoryStep(
-                prompt=[{"role": "user", "content": "main prompt"}],
-                completion=[{"role": "assistant", "content": "main response"}],
-                response=None,
-                tokens=None,
-                reward=None,
-                advantage=None,
-                is_truncated=False,
-                trajectory_id="main_trajectory",
-                extras={},
+            env._run_sub_llm = AsyncMock(
+                return_value={
+                    "final_content": "done",
+                    "total_prompt_tokens": 0,
+                    "total_completion_tokens": 0,
+                    "tool_call_count": 0,
+                    "num_turns": 1,
+                    "max_turns_reached": False,
+                    "turns": [
+                        {
+                            "prompt_messages": [],
+                            "response": MagicMock(),
+                            "tool_call_count": 0,
+                        }
+                    ],
+                }
             )
-            state = {"rollout_id": rollout_id, "trajectory": [main_step]}
-            await env.cleanup_rlm_state(state)
 
-            # Should only have main step
-            assert len(state["trajectory"]) == 1
-            assert state["trajectory"][0]["extras"].get("is_sub_llm_call") is not True
+            with (
+                patch.object(
+                    rlm_module,
+                    "parse_response_tokens",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(
+                    rlm_module,
+                    "parse_response_messages",
+                    new=AsyncMock(
+                        return_value=[{"role": "assistant", "content": "ok"}]
+                    ),
+                ),
+                patch.object(
+                    rlm_module, "parse_is_truncated", new=AsyncMock(return_value=False)
+                ),
+            ):
+                mock_request = MagicMock()
+                mock_request.match_info = {"rollout_id": rollout_id}
+                mock_request.json = AsyncMock(
+                    return_value={
+                        "messages": [{"role": "user", "content": "test"}],
+                        "_batch_id": "batch1",
+                        "_request_id": "req1",
+                    }
+                )
+
+                await env._handle_sub_llm_request(mock_request)
+
+            assert state["trajectory"] == []
 
             # Cleanup
             env.active_sandboxes.clear()

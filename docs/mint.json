@@ -5,12 +5,12 @@
       "group": "Verifiers",
       "pages": [
         "source/overview",
-        "source/concepts",
         "source/environments",
-        "source/components",
+        "source/evaluation",
         "source/training",
         "source/development",
-        "source/api_reference"
+        "source/api_reference",
+        "source/faqs"
       ]
     }
   ]

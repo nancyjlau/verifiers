@@ -1,543 +1,588 @@
 # Environments
 
-This guide covers how to create, develop, and use environments in Verifiers.
+This section walks through building environments in Verifiers, from simple single-turn tasks to complex multi-turn agents with tools. See [Overview](overview.md) for how to initialize a new environment template.
 
-## Creating a New Environment
+## Your First Environment
 
-The recommended approach is to create an environment *module*, i.e. a self-contained package that can be installed and reused.
-
-### Initialize from Template
-
-```bash
-vf-init my-math-env
-```
-
-This creates:
-```
-environments/my_math_env/
-├── my_math_env.py      # Main implementation
-├── pyproject.toml      # Dependencies and metadata
-└── README.md           # Documentation
-```
-
-### Basic Environment Structure
-
-Every environment module must export a `load_environment` function:
+The simplest single-turn environments need only a dataset of tasks and a reward function for scoring responses:
 
 ```python
-# my_math_env.py
 import verifiers as vf
+from datasets import Dataset
 
-def load_environment(**kwargs):
-    """Load and configure the environment."""
-    # 1. Load dataset
-    dataset = vf.load_example_dataset("gsm8k", split="train")
+def load_environment():
+    # Your task data
+    dataset = Dataset.from_list([
+        {"prompt": [{"role": "user", "content": "What is 2+2?"}], "answer": "4"},
+        {"prompt": [{"role": "user", "content": "What is 3*5?"}], "answer": "15"},
+    ])
     
-    # 2. Configure parser
-    parser = vf.ThinkParser()
+    # Your reward function
+    async def correct_answer(completion, answer) -> float:
+        response = completion[-1]["content"]
+        return 1.0 if answer in response else 0.0
     
-    # 3. Define reward functions -- can automatically reference:
-    # - parser, prompt, completion, answer, state , task, info 
-    def correct_answer(parser, completion, answer):
-        response = parser.parse_answer(completion) or ''
-        return 1.0 if response.strip() == answer.strip() else 0.0
+    rubric = vf.Rubric(funcs=[correct_answer])
     
-    # 4. Create rubric
-    rubric = vf.Rubric(
-        funcs=[correct_answer, parser.get_format_reward_func()],
-        weights=[1.0, 0.2]
-    )
-    
-    # 5. Return configured environment
-    return vf.SingleTurnEnv(
-        dataset=dataset,
-        system_prompt="Think step-by-step, then give your answer.",
-        parser=parser,
-        rubric=rubric,
-        **kwargs  # Pass through additional arguments
-    )
+    return vf.SingleTurnEnv(dataset=dataset, rubric=rubric)
 ```
 
-### Adding Dependencies
+When running this environment, each row in the dataset becomes a **rollout**:
 
-Specify environment-specific dependencies in `pyproject.toml`:
+1. The `prompt` is sent to the model
+2. The model generates a response, which becomes the `completion`
+3. The reward function scores the result
 
-```toml
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+In `SingleTurnEnv`, the simplest environment type, just a single model response occurs per rollout. More complex environment types will allow us to add tool use or other custom interaction protocols.
 
-[project]
-name = "my_math_env"
-description = "Single-turn math environment"
-tags = ["math", "verifiable-reward"]
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "verifiers",
-    "sympy",  # For symbolic math
+## Datasets
+
+Environments use the `datasets` library from Hugging Face for loading and manipulating datasets. Each row typically has a `prompt` column, containing a list of initial messages to send to the model. Additionally, there are optional columns for scoring:
+
+- `answer` — a simple string for ground truth comparisons
+- `info` — structured metadata (dict or JSON string)
+
+Depending on what your environment needs, you can include `answer`, `info`, both, or neither.
+
+When using `info`, prefer using JSON strings if rows may have different schemas, e.g. different fields or nested structures:
+
+```python
+dataset = Dataset.from_list([
+    {"prompt": [...], "info": '{"type": "math", "difficulty": 3}'},
+    {"prompt": [...], "info": '{"type": "code", "language": "python"}'},
+])
+```
+
+These are parsed into a `dict` by the environment when running rollouts. 
+
+
+### Building the Prompt
+
+The examples above use `prompt` directly, providing a list of messages ready to send to the model. Alternatively, you can provide a `question` column containing a string, and the environment will wrap it in a user message:
+
+```python
+dataset = Dataset.from_list([
+    {"question": "What is 2+2?", "answer": "4"},
+])
+```
+
+You can also pass a `system_prompt` to the environment, which prepends a system message:
+
+```python
+return vf.SingleTurnEnv(
+    dataset=dataset,
+    system_prompt="You are a helpful math tutor.",
+    rubric=rubric,
+)
+```
+
+Together, these construct the full prompt:
+```python
+[
+    {"role": "system", "content": "You are a helpful math tutor."},
+    {"role": "user", "content": "What is 2+2?"}
+]
+```
+
+If your dataset already has a `prompt` column, both `question` and `system_prompt` are ignored.
+
+### Evaluation Datasets
+
+Environments can be initialized with a separate `eval_dataset` for evaluation, distinct from the training dataset:
+
+```python
+return vf.SingleTurnEnv(
+    dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    rubric=rubric,
+)
+```
+
+When running `vf-eval`, the evaluation dataset is used by default. If no `eval_dataset` is provided, evaluation falls back to the training dataset.
+
+## Rubrics
+
+Each environment has a `Rubric` that manages scoring. The rubric holds reward functions, combines their outputs into a final reward score, and tracks metrics for observability.
+
+### Reward Functions
+
+Reward functions evaluate rollouts and return floats, typically between 0.0 and 1.0. They can request data from the rollout by naming arguments directly:
+
+```python
+async def correct_answer(completion, answer) -> float:
+    response = completion[-1]["content"]
+    return 1.0 if answer in response else 0.0
+```
+
+The basic available arguments, if present, are:
+- `completion` — the model's output (list of messages)
+- `prompt` — the input messages
+- `answer` — from dataset
+- `info` — from dataset
+- `state` — the full rollout state (used in more complex environments)
+
+This reference pattern extends to additional objects that the rubric provides in more advanced use cases.
+
+### Multiple Reward Functions
+
+Rubrics can combine multiple reward functions with custom weights:
+
+```python
+async def check_keywords(completion, info) -> float:
+    response = completion[-1]["content"]
+    keywords = info["required_keywords"]
+    found = sum(1 for kw in keywords if kw.lower() in response.lower())
+    return found / len(keywords)
+
+async def length_reward(completion) -> float:
+    response = completion[-1]["content"]
+    return 1.0 if len(response) < 500 else 0.5
+
+rubric = vf.Rubric(
+    funcs=[check_keywords, length_reward],
+    weights=[1.0, 0.1]
+)
+```
+
+The final rollout reward is computed as the weighted sum of all reward function scores.
+
+Reward functions can also be added to a rubric after initialization:
+```python
+rubric = vf.Rubric()
+rubric.add_reward_func(check_keywords, weight=1.0)
+rubric.add_reward_func(length_reward, weight=0.1)
+```
+
+Beyond the final score, reward functions can be used to track metrics for observability by setting `weight=0`:
+
+```python
+async def response_length(completion) -> float:
+    return float(len(completion[-1]["content"]))
+rubric.add_metric(response_length)  # shorthand for weight=0
+```
+
+All reward functions (weighted or not) appear in the rollout metrics.
+
+### Execution Order and State
+
+Reward functions execute in the order they are added to the rubric. Since `state` is mutable and shared across all reward functions, earlier functions can store computed values for later functions to use:
+
+```python
+async def similarity_score(completion, answer, state) -> float:
+    response = completion[-1]["content"]
+    score = compute_similarity(response, answer)  # continuous 0-1
+    state["similarity"] = score
+    return score
+
+async def similarity_threshold(state) -> float:
+    return 1.0 if state["similarity"] > 0.8 else 0.0
+
+rubric = vf.Rubric(
+    funcs=[similarity_score, similarity_threshold],
+    weights=[0.0, 1.0]  # log similarity, but only reward threshold
+)
+```
+
+This avoids redundant computation when multiple reward functions need access to the same derived value.
+
+### Group-Based Reward Functions
+
+During evaluation and RL training, rollouts are organized into **groups** of rollouts from the same input example. When evaluating, group structure enables per-example aggregate statistics (e.g., pass@k). When training with RL, groups are used for advantage computation relative to other rollouts for the same example. For a dataset with 100 example rows, running 4 rollouts per example yields 100 groups of 4 rollouts each.
+
+In some cases, it is useful for reward functions to operate at the group level, such as to measure diversity or compute relative rankings. To define a group reward function, use plural argument names (`completions`, `prompts`, `answers`, `infos`) and return a list of scores:
+
+```python
+async def diversity_bonus(completions) -> list[float]:
+    """Reward unique responses within a group."""
+    responses = [c[-1]["content"] for c in completions]
+    unique = set(responses)
+    # Higher reward if this response is unique
+    return [0.2 if responses.count(r) == 1 else 0.0 for r in responses]
+
+rubric = vf.Rubric(funcs=[correct_answer, diversity_bonus])
+```
+
+### Shared Objects
+
+Beyond rollout data, reward functions can request static objects that live within the Rubric class. These are stored in the Rubric's `class_objects` dictionary, and can be added after initialization via `add_class_object()`:
+
+```python
+rubric = vf.Rubric(funcs=[my_reward_func])
+rubric.add_class_object("my_helper", some_helper_object)
+
+async def my_reward_func(completion, my_helper) -> float:
+    # my_helper is now available by name
+    return await my_helper.score(completion)
+```
+
+Two common types of shared objects are **parsers** and **judges**.
+
+Parsers encapsulate logic for extracting structured content from model responses. When passed to a rubric, the parser is automatically available to reward functions:
+
+```python
+parser = vf.XMLParser(["reasoning", "answer"])
+rubric = vf.Rubric(funcs=[my_reward_func], parser=parser)
+
+async def my_reward_func(completion, parser) -> float:
+    parsed = parser.parse_answer(completion)
+    # parsed.reasoning, parsed.answer available
+    ...
+```
+
+Parsers can also be passed to environments, where they are often used during rollouts to validate or extract content. This allows parsing logic to be shared between the environment's interaction loop and the rubric's reward functions.
+
+Judges are used for tasks where deterministic evaluation is impractical, and an LLM is used to score responses. **JudgeRubric** is a built-in class which stores an LLM client inside the rubric, and provides a `judge` callable to reward functions for scoring responses:
+
+```python
+judge_rubric = vf.JudgeRubric(
+    judge_model="gpt-4.1-mini",
+)
+
+async def judge_correctness(prompt, completion, answer, judge) -> float:
+    verdict = await judge(prompt, completion, answer)
+    return 1.0 if "yes" in verdict.lower() else 0.0
+
+judge_rubric.add_reward_func(judge_correctness)
+```
+
+The `judge` callable formats a prompt comparing the model's response to the ground truth and returns the judge model's verdict.
+
+For more control, JudgeRubric accepts a custom `judge_prompt` template and exposes its internals (`judge_client`, `judge_model`, `judge_prompt`, `judge_sampling_args`) as class objects:
+
+```python
+judge_rubric = vf.JudgeRubric(
+    judge_model="gpt-4.1-mini",
+    judge_prompt="""Rate the writing quality of this response from 0-10.
+Response: {response}
+Score:"""
+)
+
+async def quality_score(completion, judge_client, judge_model, judge_prompt, parser) -> float:
+    response = parser.parse_answer(completion)
+    filled_prompt = judge_prompt.format(response=response)
+    result = await judge_client.chat.completions.create(
+        model=judge_model,
+        messages=[{"role": "user", "content": filled_prompt}],
+    )
+    # parse numeric score from result
+    ...
+    return score
+```
+
+### Rubric Groups
+
+Environments can include multiple rubrics by combining them into a `RubricGroup` (which itself behaves as a single rubric), aggregating all rewards and metrics from constituent rubrics. This is particularly useful for conjoining multiple rubrics of different types.
+
+For example, `MathRubric` is a built-in rubric that uses symbolic verification to check mathematical correctness:
+
+```python
+math_rubric = vf.MathRubric()
+```
+
+MathRubric includes a `correct_answer` reward function that parses `\boxed{}` answers and uses the `math-verify` library for symbolic equivalence checking. To add LLM-based evaluation alongside it:
+
+```python
+math_rubric = vf.MathRubric()
+judge_rubric = vf.JudgeRubric(judge_model="gpt-4.1-mini")
+judge_rubric.add_reward_func(judge_correctness, weight=0.5)
+
+rubric = vf.RubricGroup([math_rubric, judge_rubric])
+```
+
+All rubrics in a group are executed in parallel, and the final reward is the sum of all rubric rewards. Metrics from all rubrics are collected together.
+
+## Tool Environments
+
+All currently-supported environment types in Verifiers are built on `MultiTurnEnv`, which implements the core single-agent rollout loop (even `SingleTurnEnv` is simply a `MultiTurnEnv` with `max_turns=1` and a placeholder `env_response` method). `ToolEnv` adds tool calling to this foundation.
+
+Tools are defined as Python functions. Verifiers extracts tool schemas from function signatures and docstrings for use with OpenAI-compatible tool calling:
+
+```python
+async def calculate(expression: str) -> str:
+    """Evaluate a mathematical expression.
+    
+    Args:
+        expression: A mathematical expression to evaluate (e.g. "2 + 2 * 3")
+    
+    Returns:
+        The result of the evaluation.
+    """
+    try:
+        result = eval(expression)
+        return str(result)
+    except Exception as e:
+        return f"Error: {e}"
+
+async def lookup(term: str) -> str:
+    """Look up a term in the knowledge base.
+    
+    Args:
+        term: The term to search for.
+    
+    Returns:
+        Information about the term.
+    """
+    # your lookup logic here
+    ...
+```
+
+The function name becomes the tool name, type hints define the parameter types, and the docstring provides both the tool description and individual parameter descriptions (via the Args section). Tools can be sync or async, though we always recommend using async for performance to avoid blocking the main thread.
+
+To create a tool environment, pass the tools to `ToolEnv` directly:
+
+```python
+vf_env = vf.ToolEnv(
+    dataset=dataset,
+    tools=[calculate, lookup],
+    rubric=rubric,
+    max_turns=10,
+)
+```
+
+During rollouts, the model can call tools, receive results, and continue reasoning until it produces a response without tool calls (or hits `max_turns`). Each turn consists of a model response followed by the environment's tool execution.
+
+
+Tool usage can be tracked using the built-in `ToolRubric`, which provides metrics for counting individual and total tool calls, and can be added to a `RubricGroup` to combine with other reward functions:
+
+```python
+main_rubric = vf.Rubric(funcs=[my_correctness_check])   
+tool_rubric = vf.ToolRubric(tools=[calculate, lookup])
+rubric = vf.RubricGroup([main_rubric, tool_rubric])
+```
+
+### MCP Tool Environments
+
+For tools implemented as MCP (Model Context Protocol) servers, `MCPEnv` extends `ToolEnv` to provide an integration that automatically connects to MCP servers and exposes their tools to the model:
+
+```python
+mcp_servers = [
+    {
+        "name": "fetch",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+    },
 ]
 
-[tool.hatch.build]
-include = ["my_math_env.py", "pyproject.toml"]
+vf_env = vf.MCPEnv(
+    mcp_servers=mcp_servers,
+    dataset=dataset,
+    rubric=rubric,
+)
 ```
 
-### Default Evaluation Configuration
+### Stateful Tool Environments
 
-You can specify default evaluation parameters in your `pyproject.toml` to customize the default behavior when users run `vf-eval` without explicit arguments:
+`ToolEnv` and `MCPEnv` are designed for stateless, read-only tools where no session state needs to persist across calls within a rollout. For tools that require per-rollout state—such as a sandbox container, database connection, or session ID—use `StatefulToolEnv`.
 
-```toml
-[tool.verifiers.eval]
-num_examples = 20
-rollouts_per_example = 5
-```
+The `setup_state` method is called at the beginning of each rollout for all environments which extend `MultiTurnEnv`, but is a no-op by default (including in `ToolEnv`). 
 
-These defaults are automatically read from the installed package's `pyproject.toml` and used when:
-- Users don't provide `-n` / `--num-examples` or `-r` / `--rollouts-per-example` flags
-- The package is installed and `pyproject.toml` is included in the package distribution
+`StatefulToolEnv` overrides this to initialize per-rollout resources, and introduces two additional concepts:
 
-**Important**: Ensure `pyproject.toml` is included in your package by adding it to the `[tool.hatch.build]` section:
-
-```toml
-[tool.hatch.build]
-include = ["my_math_env.py", "pyproject.toml"]
-```
-
-CLI arguments always take precedence over these defaults—if a user explicitly passes `-n 10`, that value will be used regardless of what's in `pyproject.toml`.
-
-Third-party libraries can also access these defaults programmatically:
+1. **Hidden arguments**: Tool functions can have parameters that are injected by the environment but hidden from the model's tool schema (via `args_to_skip`)
+2. **`update_tool_args`**: An abstract method you implement to inject state into tool calls at runtime
 
 ```python
-import importlib.resources
-try:
-    import tomllib  # Python 3.11+
-except ImportError:
-    import tomli as tomllib
-
-package_ref = importlib.resources.files("my_math_env")
-pyproject_file = package_ref / "pyproject.toml"
-with pyproject_file.open("rb") as f:
-    pyproject_data = tomllib.load(f)
+class MySandboxEnv(vf.StatefulToolEnv):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.add_tool(self.run_code, args_to_skip=["session_id"])
     
-eval_config = pyproject_data.get("tool", {}).get("verifiers", {}).get("eval", {})
-num_examples = eval_config.get("num_examples", 5)  # fallback to 5 if not specified
+    async def setup_state(self, state, **kwargs):
+        state["session_id"] = await create_session()
+        return await super().setup_state(state, **kwargs)
+    
+    def update_tool_args(self, tool_name, tool_args, messages, state, **kwargs):
+        if tool_name == "run_code":
+            tool_args["session_id"] = state["session_id"]
+        return tool_args
+    
+    async def run_code(self, code: str, session_id: str) -> str:
+        """Execute code in the sandbox."""
+        return await execute_in_session(session_id, code)
 ```
 
-## Development Workflow
+The model sees `run_code(code: str)` in its tool schema, but the environment injects `session_id` from rollout state before each call.
 
-### 1. Install Your Environment
+Verifiers includes several built-in stateful environment classes: `SandboxEnv` provides a containerized bash shell, and `PythonEnv` extends it with a persistent Python REPL (both of which are configured for use with Prime Intellect's [Sandboxes](https://docs.primeintellect.ai/sandboxes/overview)). These handle sandbox lifecycle management automatically.
 
-During development, install your environment locally:
+Stateful environments often define methods decorated with `@vf.cleanup` (called after each rollout) or `@vf.teardown` (called once at environment shutdown) for resource management. These decorators, along with `@vf.stop` for custom stop conditions (boolean functions checked after each turn), are powerful tools for rollout lifecycle control in custom `MultiTurnEnv` subclasses.
 
-```bash
-vf-install my-math-env # wraps 'uv pip install -e ...'
-```
+## Custom Multi-Turn Environments
 
-This installs the module and its dependencies in your Python environment.
+For interaction patterns beyond tool calling—games, simulations, or other custom protocols—`MultiTurnEnv` can be subclassed directly, exposing full control over the rollout loop's behavior.
 
-### 2. Test Your Environment
+### The Rollout Loop
 
-Use the CLI to quickly test:
+Each rollout follows this structure:
 
-```bash
-vf-eval my-math-env -m gpt-4.1-mini -n 5 # runs a small batch of rollouts; use -h to see options
-```
+1. **Initialize state** — `setup_state(state)` is called to prepare per-rollout resources
+2. **Loop until done:**
+   - Get prompt messages (initial prompt, or previous conversation + environment response)
+   - Get model response
+   - Check stop conditions — if any `@vf.stop` method returns `True`, exit loop
+3. **Render completion** — final conversation is assembled into `state["completion"]`
+4. **Cleanup** — all `@vf.cleanup` methods are called
 
-Or test programmatically:
+The `env_response` method is an abstract method that must be overridden by all `MultiTurnEnv` subclasses, and defines how the environment responds after each model turn:
 
 ```python
-import verifiers as vf
-from openai import OpenAI
-
-# Load your environment
-env = vf.load_environment("my-math-env")
-
-# Test with a model
-client = OpenAI()
-results = env.evaluate_sync(
-    client=client,
-    model="gpt-4.1-mini",
-    num_examples=5,
-    rollouts_per_example=2,
-    max_concurrent=32,
-    save_every=10,
-)
-print(results)
-```
-
-Prefer `AsyncOpenAI` + `await env.evaluate(...)` for fully async workflows; the sync helper is ideal when integrating into existing blocking scripts. Intermediate saving via `save_every` requires the default interleaved scoring pipeline.
-
-### 3. Iterate on Design
-
-Common iterations:
-- Adjust system prompts for better performance
-- Refine parser logic for edge cases
-- Add new reward functions to the rubric
-- Configure dataset filtering or sampling
-
-## Using Prime CLI and the Environments Hub
-
-Prime Intellect provides a hosted [Environments Hub](https://docs.primeintellect.ai/tutorials-environments/environments) for discovering, installing, and sharing verifiers packages. The [`prime` CLI](https://github.com/PrimeIntellect-ai/prime-cli) wraps the same templates and packaging helpers exposed here, so you can publish environments once and re-use them from local machines, CI pipelines, or Prime pods.
-
-### Install and authenticate
-
-```bash
-uv tool install prime
-prime login  # stores an API token used for hub operations
-```
-
-If you collaborate through a team account, run `prime config use <team>` (or set `--team` flags in later commands) so pushes end up in the shared namespace.
-
-### Bootstrap templates from the CLI
-
-`prime env init <name>` uses the same generator as `vf-init`, but it pre-populates the directory inside `./environments/` and prints the follow-up commands for publishing. Use this when you're starting a project that you plan to ship through the Hub:
-
-```bash
-prime env init vf-math-demo
-cd environments/vf_math_demo
-# edit vf_math_demo.py, pyproject.toml, README.md, etc.
-```
-
-For existing environments you created earlier with `vf-init`, no migration is required—`prime env push` operates on any directory that contains a valid `pyproject.toml` and `load_environment` implementation.
-
-### Publish versions to the Hub
-
-Once your package is ready, build and upload it with:
-
-```bash
-prime env push --visibility PUBLIC  # or PRIVATE for internal distributions
-```
-
-The command builds a wheel (using `uv build` when available), computes a deterministic content hash, and uploads the artifact. Add `--auto-bump` to increment the patch version before publishing, or pass `--team <slug>` to publish under a team namespace. Successful pushes print a dashboard link plus a one-line install command.
-
-You can manage published artifacts directly from the CLI:
-
-- `prime env version list owner/name` shows version history and hashes.
-- `prime env version delete owner/name <content_hash>` removes a specific build.
-- `prime env delete owner/name` deletes the environment entirely.
-
-### Discover, install, and inspect environments
-
-The CLI also helps consumers find and install verifiers:
-
-```bash
-prime env list --owner my-team           # browse available environments
-prime env info my-team/vf-math-demo      # show install commands and metadata
-prime env install my-team/vf-math-demo   # install latest release with uv
-prime env install owner/env@0.1.2 --with pip  # pin version & use pip instead
-prime env pull owner/env@latest --target ./tmp-env  # download source tarball
-```
-
-`prime env install` prefers installing from the Hub's simple index (so upgrades work with `uv add`/`pip install` too), and falls back to direct wheel URLs for older releases. After installation the package becomes available to `verifiers.load_environment` just like any other module:
-
-```python
-from verifiers import load_environment
-
-env = load_environment("vf-math-demo")
-```
-
-When you run workloads on Prime pods provisioned via `prime pods create`, include these install commands in your startup scripts so the same environment definitions are available remotely.
-
-## Working with Rubrics
-
-Rubrics are central to defining what makes a good response in your environment. Here's how to use them effectively:
-
-### Basic Reward Functions
-
-A reward function takes the full context and returns a score (typically 0.0 to 1.0):
-
-```python
-def exact_match(prompt, completion, answer, state):
-    """Reward exact matches."""
-    response = completion[-1]['content']
-    return 1.0 if response.strip() == answer.strip() else 0.0
-
-def partial_credit(prompt, completion, answer, state):
-    """Give partial credit for containing key terms."""
-    key_terms = answer.lower().split()
-    response = completion[-1]['content']
-    found = sum(1 for term in key_terms if term in response.lower())
-    return found / len(key_terms) if key_terms else 0.0
-```
-
-### Creating Rubrics
-
-Combine multiple reward functions with weights:
-
-```python
-# Single criterion
-rubric = vf.Rubric(funcs=[exact_match])
-
-# Multi-criteria with weights
-rubric = vf.Rubric(
-    funcs=[exact_match, partial_credit, length_penalty],
-    weights=[1.0, 0.5, 0.1]  # Relative importance
-)
-```
-
-### Using Parser Format Rewards
-
-Parsers often provide format reward functions:
-
-```python
-parser = vf.ThinkParser(extract_fn=extract_boxed_answer)
-
-def correct_answer(parser, completion, answer):
-    parsed = parser.parse_answer(completion) # applies extract_fn to final message
-    return 1.0 if parsed == answer else 0.0
-
-rubric = vf.Rubric(
-    funcs=[
-        correct_answer,
-        parser.get_format_reward_func()  # Rewards proper <think> format
-    ],
-    weights=[1.0, 0.2]
-)
-```
-
-### Stateful Reward Functions
-
-Access environment state for complex evaluation:
-
-```python
-def efficiency_reward(prompt, response, answer, state):
-    """Reward based on number of steps taken."""
-    max_steps = 10
-    steps_taken = state.get("turn", 0)
-    return max(0, (max_steps - steps_taken) / max_steps)
-```
-
-## Environment Types
-
-Choose the appropriate base class for your task:
-
-### SingleTurnEnv
-
-For one-shot tasks with clear input/output:
-
-```python
-def load_environment(**kwargs):
-    return vf.SingleTurnEnv(
-        dataset=dataset,
-        system_prompt="Answer the question.", # only used if dataset has 'question' (str) and not 'prompt'
-        parser=parser,
-        rubric=rubric,
-        **kwargs
-    )
-```
-
-### MultiTurnEnv
-
-For interactive tasks requiring multiple steps:
-
-```python
-from typing import cast
-from verifiers.types import Messages, State
-
 class MyGameEnv(vf.MultiTurnEnv):
+    async def env_response(self, messages: vf.Messages, state: vf.State) -> vf.Messages:
+        """Generate the environment's response after each model turn."""
+        parsed = self.parser.parse(messages)
+        action = parsed.action
+        feedback = process_action(action)
+        return [{"role": "user", "content": feedback}]
 
+
+async def correct_action(parser, completion, answer) -> float:
+    parsed = parser.parse(completion)
+    return 1.0 if parsed.action == answer else 0.0
+
+
+def load_environment():
+    parser = vf.XMLParser(fields=["action"])
+    rubric = vf.Rubric(funcs=[correct_action], parser=parser)
+    return MyGameEnv(dataset=dataset, rubric=rubric, parser=parser)
+```
+
+`env_response` receives the full conversation history thus far (and `state`) and returns a list of *new* messages to append. When a parser is passed to the environment, it becomes available as `self.parser`. Passing the same parser to the rubric makes it available to reward functions by name. For tool environments, `env_response` typically executes tool calls and returns results. For games or other custom protocols, this might involve parsing structured output (as above) and returning state updates or feedback.
+
+Several other methods can optionally be overridden for more control in complex custom environments:
+
+- `setup_state(state)` — add environment-specific state fields at rollout start
+- `get_prompt_messages(state)` — customize how messages are assembled (e.g. for non-linear conversations)
+- `render_completion(state)` — customize how the final completion is assembled
+- `add_trajectory_step(state, step)` — set intermediate rewards, advantages, or extra metadata per turn
+
+### Stop Conditions
+
+Rollouts continue until a stop condition is met, checked after each model response. Custom stop conditions are defined with the `@vf.stop` decorator:
+
+```python
+class MyGameEnv(vf.MultiTurnEnv):
     @vf.stop
-    async def game_over(self, state: State) -> bool:
-        return state.get("game_over", False)
-
-    async def env_response(self, messages: Messages, state: State) -> Messages:
-        """Define how the environment responds."""
-        player_action = messages[-1]["content"]
-        
-        if self.check_win(state, player_action):
-            state["game_over"] = True
-            return cast(Messages, [{"role": "user", "content": "You won!"}])
-
-        feedback = self.get_feedback(state, player_action)
-        return cast(Messages, [{"role": "user", "content": feedback}])
+    async def game_won(self, state: vf.State) -> bool:
+        return state.get("won", False)
+    
+    @vf.stop
+    async def game_lost(self, state: vf.State) -> bool:
+        return state.get("lives", 1) <= 0
 ```
 
-### ToolEnv
+`MultiTurnEnv` includes built-in stop conditions for errors, prompt length limits, and `max_turns` by default.
 
-For tasks requiring external tools:
+Execution order can be controlled with `priority` (higher runs first). This is useful for checking cheap conditions before expensive ones:
 
 ```python
-async def calculate(expression: str) -> float:
-    """Calculate a mathematical expression."""
-    return eval(expression)  # Simplified example
+@vf.stop(priority=10)  # cheap keyword check runs first
+async def answer_submitted(self, state: vf.State) -> bool:
+    completion = state.get("completion", [])
+    if not completion:
+        return False
+    return "FINAL ANSWER:" in completion[-1].get("content", "")
 
-def load_environment(**kwargs):
-    return vf.ToolEnv(
-        dataset=dataset,
-        tools=[calculate],  # Automatically converted to tool schemas
-        parser=parser,
-        rubric=rubric,
-        **kwargs
-    )
+@vf.stop(priority=-10)  # expensive validation runs last
+async def answer_detected(self, state: vf.State) -> bool:
+    # only runs if cheap checks didn't already stop
+    return await self.validator_client.check_for_answer(state)
 ```
 
-Tool functions should be deterministic and free of hidden side effects. A rollout ends when the model produces an assistant turn with no tool calls, so store per-session context in `state` rather than globals. Use `StatefulToolEnv` if you need to inject extra arguments or secrets into each tool invocation.
+### Error Handling
 
-#### StatefulToolEnv
+Verifiers defines a hierarchy of error types under `vf.Error`:
 
-For stateful workflows, extend `vf.StatefulToolEnv`:
+- `vf.ModelError` — errors from model interactions (e.g., `vf.EmptyModelResponseError`)
+- `vf.OverlongPromptError` — prompt exceeds model context length
+- `vf.ToolError` — tool-related errors (`vf.ToolParseError`, `vf.ToolCallError`)
+- `vf.InfraError` — infrastructure errors (e.g., `vf.SandboxError`)
+
+When a `vf.Error` is raised during a rollout, it is automatically caught and stored in `state["error"]`, triggering the built-in `has_error` stop condition at the next check. This allows rollouts to terminate gracefully rather than crashing.
+
+For tool environments, you can configure which errors should stop the rollout immediately via `stop_errors`:
 
 ```python
-class SandboxAwareEnv(vf.StatefulToolEnv):
-    async def setup_state(self, state: State, **kwargs) -> State:
-        state = await super().setup_state(state, **kwargs)
-        state["sandbox_id"] = await provision_sandbox_async()
-        return state
-
-    def update_tool_args(self, tool_name: str, tool_args: dict, messages: Messages, state: State, **kwargs) -> dict:
-        return {**tool_args, "sandbox_id": state["sandbox_id"]}
+vf_env = vf.ToolEnv(
+    tools=[my_tool],
+    stop_errors=[vf.ToolParseError],  # stop on parse errors, but continue on other tool errors
+    ...
+)
 ```
 
-Keep heavy provisioning asynchronous and defer expensive await calls until a tool actually needs the resource. Remove sensitive args from the tool schema via `add_tool(..., args_to_skip=[...])` so the model never sees them.
+Errors not in `stop_errors` are caught and returned as tool response messages, providing the model a chance to recover.
 
-#### SandboxEnv & PythonEnv
+### State Initialization
 
-`vf.SandboxEnv` packages the pattern above for Prime sandboxes: it kicks off container startup in `setup_state` and injects handles into tool calls once ready. `vf.PythonEnv` is the canonical example—review it when building similar sandboxes or remote runtimes.
-
-## Advanced Patterns
-
-### Configurable Environments
-
-Accept parameters to customize behavior:
+Override `setup_state` to initialize per-rollout state:
 
 ```python
-def load_environment(
-    dataset_name="gsm8k",
-    num_examples=None,
-    difficulty="all",
-    use_calculator=False,
-    **kwargs
-):
-    # Load dataset with filtering
-    dataset = vf.load_example_dataset(dataset_name)
-    if difficulty != "all":
-        dataset = dataset.filter(lambda x: x["difficulty"] == difficulty)
-    if num_examples:
-        dataset = dataset.select(range(num_examples))
-    
-    # Conditionally add tools
-    tools = [calculate] if use_calculator else []
-    
-    # Return appropriate environment type
-    if tools:
-        return vf.ToolEnv(dataset=dataset, tools=tools, **kwargs)
-    else:
-        return vf.SingleTurnEnv(dataset=dataset, **kwargs)
+class MyGameEnv(vf.MultiTurnEnv):
+    async def setup_state(self, state: vf.State) -> vf.State:
+        state["board"] = initialize_board()
+        state["score"] = 0
+        return await super().setup_state(state)
 ```
 
-### Custom Datasets
+### Cleanup and Teardown
 
-Load datasets from various sources:
+For resource management, use `@vf.cleanup` (per-rollout) and `@vf.teardown` (at environment shutdown):
 
 ```python
-def load_environment(dataset_path=None, **kwargs):
-    if dataset_path:
-        # Load from file
-        dataset = Dataset.from_json(dataset_path)
-    else:
-        # Load from Hugging Face
-        dataset = load_dataset("owner/dataset-name", split="train")
+class MyGameEnv(vf.MultiTurnEnv):
+    @vf.cleanup
+    async def save_game_log(self, state: vf.State):
+        await log_game_result(state["game_id"], state["score"])
     
-    # Ensure required columns
-    assert "prompt" in dataset.column_names
-    assert "answer" in dataset.column_names or "info" in dataset.column_names
-    
-    return vf.SingleTurnEnv(dataset=dataset, **kwargs)
+    @vf.teardown
+    async def close_connections(self):
+        await self.db_connection.close()
 ```
 
-### Composition with EnvGroup
+### Signaling Early Termination
 
-Combine multiple environments for training on diverse tasks:
+To end a rollout from within `env_response` (e.g., when the game ends), set `state["final_env_response"]`:
 
 ```python
-def load_environment(**kwargs):
-    # Environment 1: GSM8K
-    gsm8k_dataset = vf.load_example_dataset("gsm8k")
-    gsm8k_env = vf.SingleTurnEnv(
-        dataset=gsm8k_dataset,
-        parser=parser,
-        rubric=gsm8k_rubric
-    )
-    
-    # Environment 2: MATH
-    math_dataset = vf.load_example_dataset("math")
-    math_env = vf.SingleTurnEnv(
-        dataset=math_dataset,
-        parser=parser,
-        rubric=math_rubric
-    )
-    
-    # Create grouped environment
-    return vf.EnvGroup(
-        envs=[gsm8k_env, math_env],
-        env_names=["gsm8k", "math"] # stored as "task" column
-    )
+async def env_response(self, messages: vf.Messages, state: vf.State) -> vf.Messages:
+    if check_game_over(state):
+        final_message = [{"role": "user", "content": "Game over! Final score: " + str(state["score"])}]
+        state["final_env_response"] = final_message
+        return final_message
+    # ... normal response logic
 ```
+This bypasses the normal model response loop and immediately terminates the rollout, which is useful when the environment response itself signals completion (e.g. a game is won, an answer is submitted) or is required for reward computation (e.g. final feedback or tool results).
 
-**How EnvGroup Works:**
-- **Dataset Concatenation**: Combines datasets from all environments with task labels
-- **Automatic Routing**: Routes rollouts to the correct environment based on the `task` column
-- **Unified Scoring**: Aggregates scores across all environments
+## Environment Groups
 
-This is particularly useful for:
-- Training on multiple task types simultaneously
-- Evaluating general capabilities across domains
-- Creating curriculum learning setups
-
-### Final Environment Responses
-
-In multi-turn environments, rollouts normally alternate between model responses and environment responses until a stop condition is met. However, stop conditions are evaluated *before* `env_response` runs, which means if `env_response` determines the rollout should end (e.g., a game is won, an answer is submitted), the model will generate one more unnecessary response.
-
-To handle this, set `state["final_env_response"]` in `env_response` when the environment produces its final message:
+`EnvGroup` combines multiple environments into a single environment class, enabling multi-task evaluation and training across heterogeneous environments from a unified entrypoint. Each sub-environment maintains its own dataset, rubric, and rollout logic, while the group handles routing and metric aggregation:
 
 ```python
-class GameEnv(vf.MultiTurnEnv):
-    async def env_response(self, messages: Messages, state: State) -> Messages:
-        result = self.process_action(messages[-1]["content"])
-        
-        if result.game_over:
-            response = cast(Messages, [{"role": "user", "content": result.feedback}])
-            state["final_env_response"] = response
-            return response
-        
-        return cast(Messages, [{"role": "user", "content": result.feedback}])
+math_env = load_math_environment()
+code_env = load_code_environment()
+reasoning_env = load_reasoning_environment()
+
+combined = vf.EnvGroup(
+    envs=[math_env, code_env, reasoning_env],
+    env_names=["math", "code", "reasoning"],
+)
 ```
 
-When `final_env_response` is set:
-- The rollout exits immediately without generating another model response
-- The final environment message is included in `state["completion"]` for reward computation
-- The trajectory maintains its `(prompt, completion)` structure for training (the final env message is not added to the trajectory)
+The group concatenates all sub-environment datasets, tagging each row with a `task` column that routes rollouts to the appropriate environment for generation and scoring. Metrics from all environments are tracked together. 
 
-This pattern is useful when:
-- Rewards depend on the final environment feedback (e.g., "Correct!" or score)
-- A tool call signals completion (e.g., `submit_answer`)
-- You want to preserve trailing environment responses while maintaining clean trajectory objects (i.e. `(prompt, completion)` sequences)
+## Integrations and Experimental Environments
 
-## Installing from Repository
+Beyond the core environment types, Verifiers includes integrations with several third-party environment libraries, as well as a few newer and more experimental environment classes (which are less stable and more subject to frequent changes).
 
-Install environments from the verifiers repository:
+Supported third-party environment integrations include:
 
-```bash
-# Install specific environment
-vf-install math-python --from-repo
+- **`TextArenaEnv`** — wraps [TextArena](https://github.com/LeonGuertler/TextArena) text-based game environments
+- **`ReasoningGymEnv`** — wraps [reasoning-gym](https://github.com/open-thought/reasoning-gym) procedural datasets
 
-# Install from branch
-vf-install wordle --from-repo -b dev
+These require additional dependencies installed via extras (e.g., `uv add 'verifiers[ta]'` for TextArena).
 
-# List available environments
-vf-install --list
-```
+Newer and more experimental environment classes include:
 
-## Best Practices
-
-1. **Start Simple**: Begin with SingleTurnEnv and basic reward functions
-2. **Test Early**: Use `vf-eval` to test your environment during development
-3. **Document Well**: Include clear README with examples and expected behavior
-4. **Handle Errors**: Ensure parsers and reward functions handle edge cases
-5. **Version Dependencies**: Pin specific versions in pyproject.toml
-
-
-## Next Steps
-
-- See [Components](components.md) for advanced rubrics, tools, parsers, and practical examples
-- Explore [Training](training.md) to use your environment for model improvement
+- **`GymEnv`** — universal runner for Gym-compatible environments (OpenAI Gym / Gymnasium API)
+- **`CliAgentEnv`** — runs custom agent code inside sandboxes, intercepting API requests
+- **`HarborEnv`** — loads Harbor-format agent benchmark tasks
+- **`RLMEnv`** — implements Recursive Language Models for unbounded context processing

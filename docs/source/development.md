@@ -1,6 +1,6 @@
-# Development & Testing
+# Contributing & Testing
 
-This guide covers development setup, testing, and contributing to the verifiers package.
+This guide covers setup, testing, and contributing to the verifiers package.
 
 ## Setup
 
